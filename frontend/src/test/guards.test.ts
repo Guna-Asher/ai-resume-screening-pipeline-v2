@@ -34,6 +34,14 @@ describe('frontend owns no business logic', () => {
     }
   });
 
+  it('ships no demo candidate data: no email literals and nothing imported from src/test', () => {
+    for (const [path, text] of source) {
+      expect(text, path).not.toMatch(/[A-Za-z0-9._-]+@[A-Za-z0-9-]+\.[a-z]{2,}/);
+      expect(text, path).not.toMatch(/from\s+['"][^'"]*\/test\//);
+      expect(text, path).not.toMatch(/from\s+['"][^'"]*fixtures['"]|from\s+['"]vitest['"]/);
+    }
+  });
+
   it('does not store candidate data in the browser', () => {
     for (const [path, text] of source) expect(text, path).not.toMatch(/localStorage|sessionStorage|indexedDB/);
   });

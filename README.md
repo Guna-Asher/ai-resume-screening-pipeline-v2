@@ -460,8 +460,8 @@ flight). Enrichment is awaited on the caller's event loop after the LLM phase; n
 Everything runs in Docker:
 
 ```bash
-docker compose run --rm backend pytest                       # backend: 235 tests
-docker compose run --rm --no-deps frontend npm test          # frontend: 62 tests
+docker compose run --rm backend pytest                       # backend: 248 tests
+docker compose run --rm --no-deps frontend npm test          # frontend: 63 tests
 docker compose run --rm --no-deps frontend npm run typecheck
 docker compose run --rm --no-deps frontend npm run build     # tsc + production bundle
 docker build --target prod ./frontend                        # production image (nginx, static files)
@@ -495,6 +495,15 @@ states, ranking order, details, JSON download, structural guards against busines
 - **GitHub scoring.** At most 10 points from public data: recent engineering activity (0-5) plus maintained, relevant
   repositories (0-5). Followers and stars are deliberately not used. It is applied only after eligibility, and a missing,
   private, rate-limited or failing profile scores 0 without removing or penalising the candidate.
+- **Data integrity: nothing is seeded or fabricated.** Every result is computed from the files uploaded in *that* request:
+  extraction reads the actual PDF bytes; a file that cannot be read stays a recorded failure and never becomes a candidate; a
+  missing name/email/GitHub link is `null`, never a placeholder; and LLM or GitHub data is either live or an explicit
+  `unavailable`/`failed`/`rate_limited`/`not_evaluated` status with 0 points (the deterministic baseline is the only fallback).
+  Each `/screen` request builds a fresh pipeline, so the only caches (duplicate hashes, GitHub usernames, LLM calls) live and die
+  inside one run, and `results.json` is only ever written by a completed run and read by `GET /results`, never fed back
+  into screening. The frontend renders only what the API returns (its empty state is just the upload panel). Synthetic
+  resumes, stub servers and fixtures exist only under `samples/` and `backend/tests`/`frontend/src/test`, and
+  `test_data_integrity.py` plus the frontend guards enforce that production code imports none of them.
 - **One pipeline, thin clients.** The CLI, the API and the dashboard share one backend pipeline and one result schema.
   The frontend contains no screening logic, which keeps behaviour identical everywhere and the UI easy to replace.
 
