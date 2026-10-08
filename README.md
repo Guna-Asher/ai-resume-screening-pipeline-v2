@@ -4,15 +4,16 @@ Screens a batch of PDF resumes for Python + AI/LLM/RAG/agentic engineering abili
 filter first, then an explainable 100-point score for eligible candidates only. The output is a
 machine-readable `results.json`.
 
-## Current status: Step 1 (deterministic engine)
+## Current status: Step 2 (deterministic engine + advisory LLM semantic layer)
 
 | Implemented | Not implemented yet |
 |---|---|
-| PDF (and `.txt`/`.md`) ingestion, hashing, duplicate detection | LLM semantic extraction / project-quality judgment |
-| Field extraction: name, email, skills, projects, GitHub URL | GitHub API enrichment (score is `0`, status `not_evaluated`) |
+| PDF (and `.txt`/`.md`) ingestion, hashing, duplicate detection | GitHub API enrichment and activity scoring (score is `0`, status `not_evaluated`) |
+| Field extraction: name, email, skills, projects, GitHub URL | OCR for scanned PDFs, `.docx` |
 | Hard eligibility rules (Python AND AI evidence) | Upload UI / frontend dashboard |
 | Deterministic 100-point scoring + shallow-project penalty | API endpoints beyond `/health` |
 | Ranking, `results.json` contract, CLI, tests | Deployment |
+| Optional LLM semantic analysis behind a provider adapter (advisory evidence only) | |
 
 No database, queue, auth or vector store is used or needed.
 
@@ -21,7 +22,7 @@ No database, queue, auth or vector store is used or needed.
 The host needs only Docker and Docker Compose. No local Python, pip or virtualenv.
 
 ```bash
-cp .env.example .env          # optional in Step 1; every value may stay empty
+cp .env.example .env          # optional; leave LLM_* empty for a deterministic-only run
 docker compose build
 
 # run the test suite
@@ -31,6 +32,10 @@ docker compose run --rm backend pytest
 docker compose run --rm backend python main.py \
   --input /app/resumes \
   --output /app/output/results.json
+
+# deterministic-only run (never calls an LLM)
+docker compose run --rm backend python main.py \
+  --input /app/resumes --output /app/output/results.json --no-llm
 
 # API server (health check only for now) with auto-reload
 docker compose up           # then: curl localhost:8000/health
@@ -62,6 +67,8 @@ backend/
   app/
     api.py                minimal FastAPI app (/health)
     errors.py             structured pipeline errors (stage-tagged)
+    llm/                  adapter.py (provider boundary), client.py (analyzer: cache, concurrency,
+                          failure isolation), schemas.py, prompts.py (versioned), errors.py
     config/               env settings (pydantic-settings), category weights
     models/               Pydantic contracts: Candidate, Evidence, EligibilityResult,
                           ScoreBreakdown, CandidateResult, BatchSummary, ScreeningResults
@@ -73,12 +80,13 @@ backend/
       python_evidence.py  ai_evidence.py   eligibility.py
       ai_depth.py         AI depth score + shallow penalty
       signals.py scoring.py   backend / cloud / engineering scoring, total
+      semantic.py         grounds LLM output in resume text and maps it to scoring targets
       explain.py          strengths, concerns, project summaries
       ranking.py          engine.py   batch.py
-  tests/                  synthetic resumes only; no network
+  tests/                  synthetic resumes, fake adapters, a local stub LLM server; no external network
 ```
 
-Data flow: `file bytes -> text -> Candidate (sections, lines, projects) -> eligibility -> score (eligible only) -> rank -> ScreeningResults`.
+Data flow: `file bytes -> text -> Candidate -> hard eligibility -> [eligible only: LLM semantic evidence -> grounding] -> deterministic score -> rank -> ScreeningResults`.
 Every detector works on `ResumeLine`s that carry their section, so each decision cites the line and section behind it.
 
 ## Deterministic eligibility rules
@@ -144,6 +152,73 @@ Each candidate has `matched_skills`, `project_summary`, `score_breakdown`, `gith
 `batch_summary`: `total_resumes = successfully_parsed + failed + duplicates`, and
 `successfully_parsed = eligible + rejected` (read, extracted and screened without error).
 
+## LLM Architecture
+
+**Why it exists.** Keyword rules miss paraphrases ("compares dense vectors", "wrote checks that run on every commit")
+and cannot summarise a project. The LLM reads the sectioned resume and reports *which engineering signals the text
+supports*, each with a verbatim quote, plus a short factual summary, a depth assessment and a shallow-wrapper flag.
+
+**What it may do:** supply structured *evidence* for eligible candidates, add project summaries/concerns, and corroborate
+shallow-wrapper findings. **What it may not do:** decide eligibility, assign any number, set a penalty, change ranking,
+remove anything the rules found, or be required for a batch to finish. Fields such as `score` or `penalty` in a reply are
+ignored by the schema.
+
+**Flow.** Rejected candidates are never sent to the model. For each eligible candidate:
+`prompt (header/contact block excluded) -> adapter -> JSON -> Pydantic validation -> grounding -> deterministic scoring`.
+
+**Grounding and scoring policy** (`screening/semantic.py`):
+- A signal counts only if its quote is found in a real resume line (>= 80% of the quote's words). Invented quotes are
+  discarded and counted in `llm_enrichment.rejected_signals`.
+- The grounded line must be project/work evidence. Skills-list and tutorial/coursework lines earn nothing from the LLM.
+- Every signal maps to exactly one scoring target, and each target counts once per project: `rag`/`vector_search` ->
+  retrieval (7), `embeddings` -> embeddings/vector store (4), `tool_calling`, `agents`/`multi_agent`,
+  `state_management`/`orchestration`, `evaluation`, `data_processing`/`product_logic`, `backend_logic`, `llm_usage`
+  (baseline); `fastapi`/`async`/`postgresql`/`redis` -> Python & backend rules; `gcp`/`docker`/`deployment`/`react`/
+  `nextjs` -> cloud rules; `testing`/`architecture`/`caching`/`queues`/`concurrency`/`observability`/`failure_handling` ->
+  engineering rules. `python` is ignored (Python evidence is already decided deterministically).
+  Aliases, repeated quotes and keyword-stuffed sentences therefore cannot stack points; all category caps still apply.
+- Additive only: semantic signals are *added* to rule-detected ones. With the LLM off, failed or unavailable, the score is
+  exactly the deterministic score.
+- Shallow penalty: still 5-15, chosen by the same deterministic tiers. Grounded semantic signals can remove the penalty
+  (real retrieval/tools/state/evaluation found); the model's `shallow_wrapper` flag only adds a note to the penalty reason.
+
+**Provider abstraction.** `app/llm/adapter.py` defines `LLMAdapter` (`async complete(system, user) -> str`).
+`OpenAICompatibleAdapter` covers OpenRouter, OpenAI and any OpenAI-style endpoint. Another protocol (e.g. native
+Anthropic) means one new adapter class and one line in `build_adapter`; screening/scoring code does not change.
+
+**Failure behaviour.** Timeout, rate limit (HTTP 429), auth/API errors, connection errors, non-JSON replies, schema
+violations, unexpected exceptions and missing configuration each become a candidate-level
+`llm_enrichment: {"status": "failed" | "unavailable", "reason": "<category>"}`. Categories: `timeout`, `rate_limit`,
+`auth_error`, `api_error`, `connection_error`, `invalid_json`, `schema_validation`, `unexpected`, and (unavailable)
+`not_configured`, `missing_api_key`, `missing_model`, `missing_base_url`. The candidate keeps its deterministic
+extraction, eligibility and score. Failures are logged as warnings. Raw prompts, raw replies, provider response bodies
+and keys never reach `results.json`.
+
+**Caching and concurrency.** Results (successes and failures) are cached in memory per analyzer instance, keyed by resume
+hash + prompt version + model, so a candidate is sent at most once per run. Calls run through an `asyncio.Semaphore`
+(`LLM_MAX_CONCURRENCY`, default 3; 1 = sequential). No queue, Redis or database.
+
+**Configuration** (environment / `.env`; see `.env.example`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLM_PROVIDER` | empty | `openrouter`, `openai` or `openai_compatible`. Empty = LLM step reported `unavailable`. |
+| `LLM_MODEL` | empty | Required model name (no default). |
+| `LLM_API_KEY` | empty | Required key. Held as a secret; never logged or serialised. |
+| `LLM_BASE_URL` | provider default | Overrides the endpoint; required for `openai_compatible`. |
+| `LLM_TIMEOUT_SECONDS` | `30` | Per-call timeout. |
+| `LLM_MAX_CONCURRENCY` | `3` | Simultaneous model calls. |
+
+Run with the LLM (put the values in `.env`, then):
+
+```bash
+docker compose run --rm backend python main.py --input /app/resumes --output /app/output/results.json
+```
+
+Each candidate's `llm_enrichment` reports `status` (`ok` / `failed` / `unavailable` / `skipped`), `reason`, `model`,
+`signals_accepted`, `rejected_signals`, `overall_evidence` and `confidence_notes`; `batch_summary.llm_status_counts`
+aggregates them. LLM-detected evidence carries `origin: "llm"` and quotes the real resume line.
+
 ## Error handling
 
 - Each resume runs inside its own `try/except`; a failure becomes a `failed_candidates` entry with `stage`
@@ -160,10 +235,14 @@ Each candidate has `matched_skills`, `project_summary`, `score_breakdown`, `gith
 docker compose run --rm backend pytest
 ```
 
-Synthetic resumes only; no network or API keys. Covers eligibility (Python+AI, no Python, no AI, Java/React,
+Synthetic resumes only; no live LLM, no external network, no API keys. Step 2 adds fake adapters, `httpx.MockTransport`
+adapter tests and a local OpenAI-style stub server (`tests/stub_llm_server.py`) that drives the real adapter end to end.
+Covers eligibility (Python+AI, no Python, no AI, Java/React,
 tutorial mentions), scoring (skills-list frameworks, thin wrapper penalty, strong RAG/agentic), GitHub default,
 deterministic ranking and tie-breaks, per-resume failure isolation (corrupt PDF, unreadable file, exception in
-scoring), duplicates, PDF ingestion, and the JSON contract round trip.
+scoring), duplicates, PDF ingestion, and the JSON contract round trip. LLM tests cover: valid / fenced / malformed / schema-invalid replies, timeout and API
+errors, missing key or model, caching, bounded concurrency, shallow-chatbot / RAG / stateful-agent responses,
+grounding, no double counting, failure preserving the deterministic score, and rejected candidates never reaching the model.
 
 ## Design Decisions
 
@@ -174,11 +253,14 @@ scoring), duplicates, PDF ingestion, and the JSON contract round trip.
   A reviewer can recompute any score by hand from `score_evidence`.
 - **Why hard filtering is outside the LLM.** An eligibility decision must be reproducible, auditable and free of
   prompt/model drift, and must still work when an API is down. The LLM will only add semantic signals later.
-- **Why deterministic scoring.** Same input, same output, unit-testable, no cost or latency. The future LLM may
-  supply extra project-quality *evidence*, but the arithmetic and the penalty stay in code.
+- **Why deterministic scoring.** Same input, same output, unit-testable, no cost or latency. The LLM supplies
+  normalised, grounded semantic *evidence*; the arithmetic, caps and the penalty tier stay in code. A model failure
+  never terminates screening and never changes a candidate's deterministic score.
 - **Project-quality evidence.** Depth comes from what a project/work entry says it does (retrieval, tools, state,
   evaluation, data logic), not from framework names. Skills-list keywords earn little; project/work evidence earns
   full credit. Thin wrappers are penalised, but only when *no* AI project shows depth.
+- **LLM placement.** Hard eligibility and the final score stay deterministic. The LLM runs only after the eligibility gate,
+  its output is untrusted until grounded in the resume text, and it can only add evidence.
 - **GitHub later.** An enrichment adapter will fill `github_enrichment` and the 10-point category from the extracted
   `github_url`; failures will yield a status (not an exception) and never affect eligibility.
 
@@ -186,12 +268,15 @@ scoring), duplicates, PDF ingestion, and the JSON contract round trip.
 
 - Calibrate the keyword tables and point weights against ~50 real, labelled resumes and add a regression fixture set.
 - Better PDF layout handling (multi-column resumes, OCR for scanned PDFs) and `.docx` support.
-- A pluggable LLM adapter to *propose* extra project-quality evidence (with a recorded confidence), kept out of the
-  eligibility decision and the arithmetic.
+- Let semantic analysis also *veto* keyword-only false positives (currently it can only add evidence), and add a retry/backoff
+  policy for rate limits plus a native Anthropic adapter.
 - Decide how to treat classic ML/NLP/CV projects (currently not AI evidence) with the hiring team.
 
-## Known limitations (Step 1)
+## Known limitations
 
 - Section and project detection is heuristic; resumes that lose bullet markers collapse a project section into one project.
 - Classic machine-learning projects (scikit-learn, etc.) are deliberately not counted as AI/LLM evidence.
 - A very sparse resume can floor at a total of 0 after the shallow-project penalty.
+- Semantic grounding checks that a quote exists in the resume, not that it truly supports the claimed signal; a resume
+  containing prompt-injection text can still present misleading (but real) lines. Only the LLM-added share of the score is exposed to this.
+- The LLM step uses `asyncio.run` and must not be called from inside a running event loop (relevant when API endpoints are added).
