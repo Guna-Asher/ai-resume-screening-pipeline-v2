@@ -1,0 +1,42 @@
+from app.models.candidate import Candidate, Project, ResumeLine
+from app.models.evidence import Evidence, EvidenceCategory, EvidenceSource, Strength
+from app.models.results import (
+    SCHEMA_VERSION,
+    BatchSummary,
+    CandidateResult,
+    DuplicateRecord,
+    EligibilityResult,
+    GitHubEnrichment,
+    GitHubStatus,
+    Penalty,
+    ProcessingError,
+    ProcessingStatus,
+    ProjectSummary,
+    ScoreBreakdown,
+    ScoreItem,
+    ScreeningResults,
+)
+
+__all__ = [
+    "SCHEMA_VERSION",
+    "BatchSummary",
+    "Candidate",
+    "CandidateResult",
+    "DuplicateRecord",
+    "EligibilityResult",
+    "Evidence",
+    "EvidenceCategory",
+    "EvidenceSource",
+    "GitHubEnrichment",
+    "GitHubStatus",
+    "Penalty",
+    "ProcessingError",
+    "ProcessingStatus",
+    "Project",
+    "ProjectSummary",
+    "ResumeLine",
+    "ScoreBreakdown",
+    "ScoreItem",
+    "ScreeningResults",
+    "Strength",
+]
