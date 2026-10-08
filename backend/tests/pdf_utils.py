@@ -31,3 +31,8 @@ def make_pdf(lines: list[str]) -> bytes:
         f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
     )
     return bytes(out)
+
+
+def pdf_from_text(text: str) -> bytes:
+    """A resume given as plain text -> single-page PDF bytes (bullets downgraded to latin-1)."""
+    return make_pdf(text.replace("•", "-").split("\n"))

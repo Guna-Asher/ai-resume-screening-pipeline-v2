@@ -1,5 +1,12 @@
-"""Batch processing: one resume's failure never stops the batch."""
+"""Batch processing: one resume's failure never stops the batch.
 
+The core is ``BatchProcessor.process_async`` / ``process_directory_async``. They are
+plain coroutines (no ``asyncio.run`` inside), so they can be awaited from the FastAPI
+event loop and from the CLI's single top-level ``asyncio.run``. The sync ``process`` /
+``process_directory`` wrappers exist only for synchronous callers such as unit tests.
+"""
+
+import asyncio
 import logging
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -9,8 +16,8 @@ from pathlib import Path
 from app.errors import ProcessingStage, ResumeProcessingError
 from app.extraction import extract_candidate
 from app.github import GitHubEnricher, failure
-from app.llm import SemanticAnalyzer, SemanticOutcome
 from app.ingestion import discover_resume_files, extract_text, sha256_bytes, text_fingerprint
+from app.llm import SemanticAnalyzer, SemanticOutcome
 from app.models import (
     BatchSummary,
     Candidate,
@@ -30,7 +37,8 @@ logger = logging.getLogger(__name__)
 
 TextReader = Callable[[str, bytes], str]
 Extractor = Callable[[str, str, str], Candidate]
-Screener = Callable[..., CandidateResult]  # (candidate[, semantic=SemanticOutcome])
+Screener = Callable[..., CandidateResult]  # (candidate[, semantic=..., github=...])
+ResumeItem = tuple[str, Callable[[], bytes]]  # (reported filename, lazy byte reader)
 
 
 def failed_result(
@@ -53,6 +61,8 @@ class BatchProcessor:
     candidates only - LLM semantic analysis and GitHub enrichment (both optional, bounded
     concurrency, cached per run), (3) deterministic scoring (GitHub points included) and
     ranking. Each resume is isolated at every phase.
+
+    One instance is meant for one run: the analyzer / enricher carry run-level caches.
     """
 
     def __init__(
@@ -71,15 +81,45 @@ class BatchProcessor:
         self._analyzer = analyzer
         self._github = github
 
-    def process_directory(self, input_dir: Path) -> ScreeningResults:
+    # ------------------------------------------------------------------ async API
+
+    async def process_directory_async(self, input_dir: Path) -> ScreeningResults:
         paths = discover_resume_files(input_dir)
-        items: list[tuple[str, Callable[[], bytes]]] = [
+        items: list[ResumeItem] = [
             (p.relative_to(input_dir).as_posix(), p.read_bytes) for p in paths
         ]
-        return self.process(items)
+        return await self.process_async(items)
 
-    def process(self, items: Sequence[tuple[str, Callable[[], bytes]]]) -> ScreeningResults:
-        """``items`` are (filename, lazy byte reader) pairs, processed in the given order."""
+    async def process_async(self, items: Sequence[ResumeItem]) -> ScreeningResults:
+        """``items`` are (filename, lazy byte reader) pairs, processed in the given order.
+
+        CPU/file-bound phases run in worker threads so the event loop (and, in the API,
+        health checks) stay responsive; the LLM and GitHub phases are awaited directly.
+        """
+        prepared, failed, duplicates = await asyncio.to_thread(self._prepare, items)
+        eligible = await asyncio.to_thread(self._eligible, prepared)
+        outcomes = await self._semantic_outcomes(eligible)
+        github_results = await self._github_enrichments(eligible)
+        return await asyncio.to_thread(
+            self._finish, len(items), prepared, failed, duplicates, outcomes, github_results
+        )
+
+    # ------------------------------------------------------- sync wrappers (tests)
+
+    def process_directory(self, input_dir: Path) -> ScreeningResults:
+        """Synchronous convenience wrapper. Do not call from a running event loop."""
+        return asyncio.run(self.process_directory_async(input_dir))
+
+    def process(self, items: Sequence[ResumeItem]) -> ScreeningResults:
+        """Synchronous convenience wrapper. Do not call from a running event loop."""
+        return asyncio.run(self.process_async(items))
+
+    # ------------------------------------------------------------------- phases
+
+    def _prepare(
+        self, items: Sequence[ResumeItem]
+    ) -> tuple[list[Candidate], list[CandidateResult], list[DuplicateRecord]]:
+        """Phase 1: read, de-duplicate, parse and extract. Failures become records."""
         seen_bytes: dict[str, str] = {}
         seen_text: dict[str, str] = {}
         prepared: list[Candidate] = []
@@ -126,10 +166,18 @@ class BatchProcessor:
                 else:  # unexpected: keep the traceback
                     logger.exception("Unexpected failure on %s at %s", filename, stage.value)
                 failed.append(failed_result(filename, resume_hash, stage, exc))
+        return prepared, failed, duplicates
 
-        eligible_candidates = self._eligible(prepared)
-        outcomes = self._semantic_outcomes(eligible_candidates)
-        github_results = self._github_enrichments(eligible_candidates)
+    def _finish(
+        self,
+        total: int,
+        prepared: list[Candidate],
+        failed: list[CandidateResult],
+        duplicates: list[DuplicateRecord],
+        outcomes: dict[str, SemanticOutcome],
+        github_results: dict[str, GitHubEnrichment],
+    ) -> ScreeningResults:
+        """Phase 3: deterministic scoring, ranking and the batch summary."""
         eligible: list[CandidateResult] = []
         rejected: list[CandidateResult] = []
         for candidate in prepared:
@@ -143,27 +191,30 @@ class BatchProcessor:
                 (eligible if result.eligible else rejected).append(result)
             except Exception as exc:
                 logger.exception(
-                    "Unexpected failure on %s at %s", candidate.resume_filename, ProcessingStage.SCREEN
+                    "Unexpected failure on %s at %s",
+                    candidate.resume_filename,
+                    ProcessingStage.SCREEN.value,
                 )
                 failed.append(
-                    failed_result(candidate.resume_filename, candidate.resume_hash, ProcessingStage.SCREEN, exc)
+                    failed_result(
+                        candidate.resume_filename, candidate.resume_hash, ProcessingStage.SCREEN, exc
+                    )
                 )
 
         failed.sort(key=lambda r: r.resume_filename.casefold())
         ranked = rank_candidates(eligible)
         rejected.sort(key=lambda r: (r.resume_filename.casefold(), r.resume_hash or ""))
+        screened = [*ranked, *rejected]
         summary = BatchSummary(
-            total_resumes=len(items),
+            total_resumes=total,
             successfully_parsed=len(ranked) + len(rejected),
             eligible=len(ranked),
             rejected=len(rejected),
             failed=len(failed),
             duplicates=len(duplicates),
-            llm_status_counts=dict(
-                sorted(Counter(r.llm_enrichment.status for r in [*ranked, *rejected]).items())
-            ),
+            llm_status_counts=dict(sorted(Counter(r.llm_enrichment.status for r in screened).items())),
             github_status_counts=dict(
-                sorted(Counter(r.github_enrichment.status.value for r in [*ranked, *rejected]).items())
+                sorted(Counter(r.github_enrichment.status.value for r in screened).items())
             ),
         )
         return ScreeningResults(
@@ -188,23 +239,29 @@ class BatchProcessor:
                 logger.exception("Eligibility check failed for %s", candidate.resume_filename)
         return eligible
 
-    def _semantic_outcomes(self, eligible: Sequence[Candidate]) -> dict[str, SemanticOutcome]:
+    async def _semantic_outcomes(
+        self, eligible: Sequence[Candidate]
+    ) -> dict[str, SemanticOutcome]:
         """LLM analysis for eligible candidates only. Never raises."""
         if self._analyzer is None or not eligible:
             return {}
         try:
-            return self._analyzer.analyze_many(list(eligible))
+            return await self._analyzer.analyze_many_async(list(eligible))
         except Exception as exc:  # analyzer already isolates model errors; this is a last resort
             logger.exception("LLM batch analysis failed unexpectedly")
             failure_outcome = SemanticOutcome("failed", reason=f"unexpected:{type(exc).__name__}")
             return {c.resume_hash: failure_outcome for c in eligible}
 
-    def _github_enrichments(self, eligible: Sequence[Candidate]) -> dict[str, GitHubEnrichment]:
+    async def _github_enrichments(
+        self, eligible: Sequence[Candidate]
+    ) -> dict[str, GitHubEnrichment]:
         """Public-GitHub signal for eligible candidates only. Never raises."""
         if self._github is None or not eligible:
             return {}
         try:
-            return self._github.enrich_many([(c.resume_hash, c.github_url) for c in eligible])
+            return await self._github.enrich_many_async(
+                [(c.resume_hash, c.github_url) for c in eligible]
+            )
         except Exception as exc:  # enricher already isolates API errors; this is a last resort
             logger.exception("GitHub batch enrichment failed unexpectedly")
             return {

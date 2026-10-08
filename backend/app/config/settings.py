@@ -33,11 +33,22 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     llm_max_concurrency: int = Field(default=3, ge=1, le=32)
 
+    # API / output
+    results_path: Path = Path("output/results.json")  # /app/output/results.json in Docker
+    cors_origins: str = "http://localhost:3000"  # comma-separated; empty disables CORS
+    max_upload_files: int = Field(default=200, ge=1, le=2000)
+    max_upload_total_mb: int = Field(default=200, ge=1, le=2000)
+
     # GitHub enrichment (public REST API). The token is optional: it only raises rate limits.
     github_token: SecretStr | None = None
     github_api_base_url: str = "https://api.github.com"
     github_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     github_max_concurrency: int = Field(default=3, ge=1, le=16)
+
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
 def load_settings() -> Settings:

@@ -6,16 +6,17 @@ Screens a batch of PDF resumes for Python + AI/LLM/RAG/agentic engineering abili
 filter first, then an explainable 100-point score for eligible candidates only. The output is a
 machine-readable `results.json`.
 
-## Current status: Step 3 (deterministic engine + advisory LLM layer + GitHub enrichment)
+## Current status: Step 4 (deterministic engine + LLM layer + GitHub enrichment + HTTP API)
 
 | Implemented | Not implemented yet |
 |---|---|
 | PDF (and `.txt`/`.md`) ingestion, hashing, duplicate detection | Frontend dashboard, browser upload UI |
 | Field extraction: name, email, skills, projects, GitHub URL | OCR for scanned PDFs, `.docx` |
 | Hard eligibility rules (Python AND AI evidence) | Authentication |
-| Deterministic 100-point scoring + shallow-project penalty | API endpoints beyond `/health` |
+| Deterministic 100-point scoring + shallow-project penalty | Background jobs, queues, WebSockets |
 | Ranking, `results.json` contract, CLI, tests | Deployment |
 | Optional LLM semantic analysis behind a provider adapter (advisory evidence only) | |
+| FastAPI interface (`/health`, `/screen`, `/results`) over the same pipeline as the CLI | |
 | Lightweight public GitHub enrichment, 0-10 points (never affects eligibility) | |
 
 No database, queue, auth or vector store is used or needed.
@@ -40,7 +41,7 @@ docker compose run --rm backend python main.py \
 docker compose run --rm backend python main.py \
   --input /app/resumes --output /app/output/results.json --no-llm --no-github
 
-# API server (health check only for now) with auto-reload
+# API server on http://localhost:8000 (auto-reload; docs at /docs)
 docker compose up           # then: curl localhost:8000/health
 ```
 
@@ -63,12 +64,14 @@ Secrets are read from the environment at run time and are never baked into the i
 docker-compose.yml        backend service only
 .env.example              documented configuration (all optional)
 resumes/  output/         mounted data folders
-frontend/                 placeholder (later step)
+frontend/                 placeholder (later step; no UI exists yet)
 backend/
   Dockerfile  requirements.txt  pytest.ini
   main.py                 CLI entry point
   app/
-    api.py                minimal FastAPI app (/health)
+    api/                  FastAPI app: routes.py (thin handlers), uploads.py (safe upload storage),
+                          schemas.py, main.py (app factory, CORS, error handler)
+    pipeline/             factory.py (builds the processor: used by CLI and API), results_store.py (atomic results.json)
     errors.py             structured pipeline errors (stage-tagged)
     github/               client.py (HTTP), service.py (cache, concurrency, failure isolation),
                           scoring.py (pure 0-10 rules), urls.py (link -> username), schemas.py, errors.py
@@ -157,6 +160,80 @@ Each candidate has `matched_skills`, `project_summary`, `score_breakdown`, `gith
 `batch_summary`: `total_resumes = successfully_parsed + failed + duplicates`, and
 `successfully_parsed = eligible + rejected` (read, extracted and screened without error).
 
+## API
+
+The API is a thin interface over the **same** pipeline the CLI uses (`app/pipeline/factory.py` builds the processor;
+`BatchProcessor.process_async` runs it). Route handlers only validate input, store uploads safely, call the pipeline and
+return the canonical `ScreeningResults` model: there is no screening logic in the API layer.
+
+```text
+                 CLI (main.py)        API (app/api)
+                        \               /
+                   app.pipeline.build_processor
+                              |
+                     BatchProcessor (async)
+        extraction -> eligibility -> LLM / GitHub (eligible only) -> deterministic scoring -> ranking
+                              |
+                       ScreeningResults -> results.json
+```
+
+Start it with `docker compose up` (port 8000). Interactive docs: `http://localhost:8000/docs`; schema: `/openapi.json`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | `{"status": "ok"}`. No configuration is exposed. |
+| `POST` | `/screen` | Multipart upload of one or many resumes; returns `ScreeningResults` and writes `output/results.json`. |
+| `GET` | `/results` | The latest completed `ScreeningResults` read from `results.json`; `404` if no run has completed yet. |
+
+**`POST /screen`**: repeat the multipart field `files` once per resume (PDF is the intended format; `.txt`/`.md` are also
+accepted for testing). Query options (default `true`, equivalent to the CLI's `--no-llm` / `--no-github`):
+`use_llm`, `use_github`. Scoring rules and weights cannot be changed through the API.
+
+```bash
+curl -X POST "http://localhost:8000/screen" \
+  -F "files=@resumes/candidate_01.pdf" \
+  -F "files=@resumes/candidate_02.pdf" \
+  -F "files=@resumes/candidate_03.pdf"
+
+# deterministic only, no model or GitHub calls
+curl -X POST "http://localhost:8000/screen?use_llm=false&use_github=false" -F "files=@resumes/candidate_01.pdf"
+
+curl http://localhost:8000/results
+```
+
+- **Folder uploads need no special endpoint.** A browser directory picker just sends every selected file as a `files`
+  part; one request is one batch. Folder-relative names such as `team_a/cv.pdf` are kept for display; `.`-prefixed files
+  (`.DS_Store`) are skipped, matching the CLI.
+- **Upload safety.** Uploaded filenames are untrusted. Each file is streamed into an isolated temporary directory under a
+  generated name (`0000.pdf`, `0001.pdf`, ...); the client name is only sanitised for reporting (backslashes become `/`,
+  control characters, empty, `.` and `..` segments and drive letters are dropped, so `../../etc/passwd.pdf` is reported as
+  `etc/passwd.pdf`). Two files with the same name are reported as `cv.pdf` and `cv (2).pdf`. The temporary directory is
+  removed when the request ends (also on errors); the project's `resumes/` folder is never touched.
+- **Per-file problems stay per-file.** Unsupported types, empty files and corrupt PDFs appear under `failed_candidates`
+  with HTTP 200, exactly like the CLI. Duplicates (identical bytes or text) appear under `duplicates`.
+- **Request errors.** `422` no `files` field; `400` no usable files (blank or only hidden files); `413` more than
+  `MAX_UPLOAD_FILES` files or more than `MAX_UPLOAD_TOTAL_MB` in total; `409` another run is in progress (runs are
+  serialised, not queued); `500` the pipeline failed unexpectedly (a generic message; details only in the server log, never
+  API keys, headers or provider responses). A failed request never modifies the previous `results.json`.
+- **Isolation.** Each request builds a fresh processor, so LLM/GitHub caches and rate-limit state are never shared between
+  requests. Within a request the LLM and GitHub semaphores and caches work as before.
+- **Output.** `results.json` is written atomically (temp file in the same folder, `fsync`, rename), so `/results` and
+  readers on the host never see a half-written file. It is visible on the host as `./output/results.json`. It contains
+  no raw model output, provider responses or tokens.
+
+**CORS.** `CORS_ORIGINS` is a comma-separated list of allowed browser origins (default `http://localhost:3000`). Only
+`GET`/`POST` and the `Content-Type` header are allowed. Set it to an empty string to disable CORS. `*` is accepted but
+logs a warning; it is not the default. There is no authentication.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CORS_ORIGINS` | `http://localhost:3000` | Allowed browser origins, comma-separated. |
+| `RESULTS_PATH` | `output/results.json` | Where `/screen` writes and `/results` reads (`/app/output/results.json` in Docker). |
+| `MAX_UPLOAD_FILES` | `200` | Maximum files per `/screen` request. |
+| `MAX_UPLOAD_TOTAL_MB` | `200` | Maximum total upload size per request. |
+
+A single file larger than 20 MB is recorded as a per-file failure rather than rejecting the request.
+
 ## GitHub Enrichment
 
 **Why it is additional, not mandatory.** The assignment treats GitHub as a lightweight positive signal worth at most
@@ -224,8 +301,8 @@ distinct accounts per hour at two requests each: set `GITHUB_TOKEN` for larger b
 **Caching and concurrency.** Results (including failures) are cached in memory per run by lower-cased username, so two
 resumes naming the same account cause one enrichment. Accounts are processed with an `asyncio.Semaphore`
 (`GITHUB_MAX_CONCURRENCY`, default 3; a user's two requests run sequentially, so at most that many requests are in
-flight). Enrichment runs in its own `asyncio.run` after the LLM phase, not nested inside it (the known limitation about
-calling the batch from inside a running event loop still applies when API endpoints are added).
+flight). Enrichment is awaited on the caller's event loop after the LLM phase; nothing in the pipeline calls
+`asyncio.run`.
 
 **Configuration.**
 
@@ -326,7 +403,7 @@ adapter tests and a local OpenAI-style stub server (`tests/stub_llm_server.py`) 
 Covers eligibility (Python+AI, no Python, no AI, Java/React,
 tutorial mentions), scoring (skills-list frameworks, thin wrapper penalty, strong RAG/agentic), GitHub default,
 deterministic ranking and tie-breaks, per-resume failure isolation (corrupt PDF, unreadable file, exception in
-scoring), duplicates, PDF ingestion, and the JSON contract round trip. GitHub tests (fake transport, no live GitHub) cover URL normalisation, activity/repository scoring and relevance, 404 / rate limit / timeout / API errors, token handling, caching, bounded concurrency, score caps, rejected candidates making no calls, failure preservation and stable ranking. LLM tests cover: valid / fenced / malformed / schema-invalid replies, timeout and API
+scoring), duplicates, PDF ingestion, and the JSON contract round trip. API tests (`TestClient`, fake LLM and GitHub, temporary results file) cover health, single/multiple/mixed/corrupt/duplicate uploads, no files, unsupported types, option flags, `/results` before and after a run, schema equality, atomic writes and failure preservation, hostile filenames and temp-dir cleanup, per-request isolation, no nested `asyncio.run`, 409/413 limits, CORS, OpenAPI, and CLI/API parity. GitHub tests (fake transport, no live GitHub) cover URL normalisation, activity/repository scoring and relevance, 404 / rate limit / timeout / API errors, token handling, caching, bounded concurrency, score caps, rejected candidates making no calls, failure preservation and stable ranking. LLM tests cover: valid / fenced / malformed / schema-invalid replies, timeout and API
 errors, missing key or model, caching, bounded concurrency, shallow-chatbot / RAG / stateful-agent responses,
 grounding, no double counting, failure preserving the deterministic score, and rejected candidates never reaching the model.
 
@@ -367,6 +444,8 @@ grounding, no double counting, failure preserving the deterministic score, and r
 - A very sparse resume can floor at a total of 0 after the shallow-project penalty.
 - Semantic grounding checks that a quote exists in the resume, not that it truly supports the claimed signal; a resume
   containing prompt-injection text can still present misleading (but real) lines. Only the LLM-added share of the score is exposed to this.
-- The LLM and GitHub steps each use `asyncio.run` and must not be called from inside a running event loop (relevant when API endpoints are added).
+- The sync wrappers `BatchProcessor.process()` / `process_directory()` (used by unit tests) call `asyncio.run` and must not be used inside a running loop; the CLI and API use the async methods.
+- Only one `/screen` run executes at a time (a second concurrent request gets HTTP 409). Runs are synchronous HTTP requests: a large batch with a slow LLM can take long, and there is no progress reporting or job queue.
+- `GET /results` returns only the latest run; there is no history.
 - GitHub sees only one page (100) of public events and repos, so very prolific accounts are slightly under-counted, and `public_repositories` counts at most 100. Repo-name/description keyword relevance can mislabel repos.
 - A single repository link on a resume is trusted to belong to the candidate when it is the only owner mentioned.

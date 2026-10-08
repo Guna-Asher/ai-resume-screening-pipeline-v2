@@ -4,6 +4,7 @@ pydantic>=2.6
 pydantic-settings>=2.2
 pypdf>=4.0
 httpx>=0.27
+python-multipart>=0.0.9  # multipart/form-data uploads
 
 # test / dev
 pytest>=8
