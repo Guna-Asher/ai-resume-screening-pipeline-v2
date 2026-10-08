@@ -6,17 +6,18 @@ Screens a batch of PDF resumes for Python + AI/LLM/RAG/agentic engineering abili
 filter first, then an explainable 100-point score for eligible candidates only. The output is a
 machine-readable `results.json`.
 
-## Current status: Step 4 (deterministic engine + LLM layer + GitHub enrichment + HTTP API)
+## Current status: Step 5 (deterministic engine + LLM layer + GitHub enrichment + HTTP API + web dashboard)
 
 | Implemented | Not implemented yet |
 |---|---|
-| PDF (and `.txt`/`.md`) ingestion, hashing, duplicate detection | Frontend dashboard, browser upload UI |
+| PDF (and `.txt`/`.md`) ingestion, hashing, duplicate detection | Authentication, accounts, database |
 | Field extraction: name, email, skills, projects, GitHub URL | OCR for scanned PDFs, `.docx` |
 | Hard eligibility rules (Python AND AI evidence) | Authentication |
 | Deterministic 100-point scoring + shallow-project penalty | Background jobs, queues, WebSockets |
 | Ranking, `results.json` contract, CLI, tests | Deployment |
 | Optional LLM semantic analysis behind a provider adapter (advisory evidence only) | |
 | FastAPI interface (`/health`, `/screen`, `/results`) over the same pipeline as the CLI | |
+| React dashboard: upload files or a folder, ranked results, candidate details, JSON download | |
 | Lightweight public GitHub enrichment, 0-10 points (never affects eligibility) | |
 
 No database, queue, auth or vector store is used or needed.
@@ -41,9 +42,16 @@ docker compose run --rm backend python main.py \
 docker compose run --rm backend python main.py \
   --input /app/resumes --output /app/output/results.json --no-llm --no-github
 
-# API server on http://localhost:8000 (auto-reload; docs at /docs)
-docker compose up           # then: curl localhost:8000/health
+# the whole stack: dashboard http://localhost:3000, API http://localhost:8000 (docs at /docs)
+docker compose up --build
+
+# frontend tests / production build check (all inside Docker)
+docker compose run --rm --no-deps frontend npm test
+docker compose run --rm --no-deps frontend npm run build
 ```
+
+Ports are configurable with `FRONTEND_PORT` / `BACKEND_PORT` (e.g. in `.env`); `CORS_ORIGINS` follows `FRONTEND_PORT`
+automatically, and the browser reaches the API at `VITE_API_BASE_URL` (default `http://localhost:${BACKEND_PORT}`).
 
 How the pieces line up:
 
@@ -64,7 +72,7 @@ Secrets are read from the environment at run time and are never baked into the i
 docker-compose.yml        backend service only
 .env.example              documented configuration (all optional)
 resumes/  output/         mounted data folders
-frontend/                 placeholder (later step; no UI exists yet)
+frontend/                 React + TypeScript + Vite dashboard (see frontend/README.md)
 backend/
   Dockerfile  requirements.txt  pytest.ini
   main.py                 CLI entry point
@@ -155,7 +163,7 @@ missing names last), then resume filename, then resume hash. Ranks are sequentia
 `ScreeningResults` (schema version `1.0`): `generated_at`, `batch_summary`, `eligible_candidates` (ranked),
 `rejected_candidates` (with reasons, matched skills, no rank/score), `failed_candidates`, `duplicates`.
 Each candidate has `matched_skills`, `project_summary`, `score_breakdown`, `github_enrichment`, `strengths`,
-`concerns` and `status`/`error`. The frontend will consume this contract; it must not duplicate screening logic.
+`concerns` and `status`/`error`. The dashboard consumes this contract and does not duplicate screening logic. `score_breakdown.category_max` carries the category weights so clients never hard-code them.
 
 `batch_summary`: `total_resumes = successfully_parsed + failed + duplicates`, and
 `successfully_parsed = eligible + rejected` (read, extracted and screened without error).
@@ -233,6 +241,26 @@ logs a warning; it is not the default. There is no authentication.
 | `MAX_UPLOAD_TOTAL_MB` | `200` | Maximum total upload size per request. |
 
 A single file larger than 20 MB is recorded as a per-file failure rather than rejecting the request.
+
+## Web dashboard
+
+`docker compose up --build` also starts the dashboard at **http://localhost:3000** (React 18, TypeScript, Vite; the
+only runtime dependencies are React and the `lucide-react` icons). It is a *client* of the API above: it uploads files,
+renders the `ScreeningResults` JSON it gets back, and offers it for download. **All screening logic stays in the
+backend**: the frontend contains no eligibility rules, scoring, GitHub or LLM calls, and never re-sorts or recomputes
+anything (tests enforce this; see `frontend/src/test/guards.test.ts`).
+
+Flow: choose files, drag and drop, or **Choose Folder** (a folder pick is just all its PDFs sent as one multipart batch to
+`POST /screen`; non-PDFs are skipped with a notice) -> review the list -> **Process Resumes** -> an indeterminate
+processing state (the API reports no progress, so there are no fake percentages) -> dashboard: batch statistics straight
+from `batch_summary`, a ranked candidate list in the backend's order, tabs for rejected / failed / duplicates, search by
+name, skill or filename, candidate details (score by category against backend-provided maxima, penalties shown
+separately, GitHub status, skills, projects, strengths, concerns, evidence, raw JSON with copy) and **Download JSON**
+(`resume-screening-results.json`, the complete backend document). On load it calls `GET /health` for the connection
+indicator and `GET /results` to offer "View latest results"; nothing is stored in the browser.
+
+See `frontend/README.md` for structure, configuration and tests. The production image
+(`docker build --target prod ./frontend`) is static files behind nginx with no Node.
 
 ## GitHub Enrichment
 
@@ -400,7 +428,7 @@ docker compose run --rm backend pytest
 
 Synthetic resumes only; no live LLM, no external network, no API keys. Step 2 adds fake adapters, `httpx.MockTransport`
 adapter tests and a local OpenAI-style stub server (`tests/stub_llm_server.py`) that drives the real adapter end to end.
-Covers eligibility (Python+AI, no Python, no AI, Java/React,
+Frontend tests (`docker compose run --rm --no-deps frontend npm test`, Vitest + Testing Library with a mocked API) cover upload/selection/validation, processing and error states (offline, 409, 413, 500), the dashboard, ranking order, rejected/failed/duplicate sections, candidate details, GitHub states, JSON download and copy, restoring `/results`, and structural guards against business logic and hover-only UI. Backend tests: eligibility (Python+AI, no Python, no AI, Java/React,
 tutorial mentions), scoring (skills-list frameworks, thin wrapper penalty, strong RAG/agentic), GitHub default,
 deterministic ranking and tie-breaks, per-resume failure isolation (corrupt PDF, unreadable file, exception in
 scoring), duplicates, PDF ingestion, and the JSON contract round trip. API tests (`TestClient`, fake LLM and GitHub, temporary results file) cover health, single/multiple/mixed/corrupt/duplicate uploads, no files, unsupported types, option flags, `/results` before and after a run, schema equality, atomic writes and failure preservation, hostile filenames and temp-dir cleanup, per-request isolation, no nested `asyncio.run`, 409/413 limits, CORS, OpenAPI, and CLI/API parity. GitHub tests (fake transport, no live GitHub) cover URL normalisation, activity/repository scoring and relevance, 404 / rate limit / timeout / API errors, token handling, caching, bounded concurrency, score caps, rejected candidates making no calls, failure preservation and stable ranking. LLM tests cover: valid / fenced / malformed / schema-invalid replies, timeout and API
@@ -409,6 +437,7 @@ grounding, no double counting, failure preserving the deterministic score, and r
 
 ## Design Decisions
 
+- **Thin frontend.** The dashboard only displays backend results (ranking order, maxima, reasons and evidence are used as supplied), so the API/CLI/JSON remain the single source of truth.
 - **Filtering strategy.** Eligibility is a two-part gate (Python AND AI) evaluated on section- and
   context-aware lines, not on whole-document keyword search. Weak mentions are kept as evidence, labelled weak, so a
   rejection can explain exactly what was seen and why it did not count.

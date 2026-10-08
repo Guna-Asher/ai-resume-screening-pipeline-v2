@@ -4,6 +4,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 
+# Frontend
+node_modules/
+dist/
+
 # Secrets
 .env
 

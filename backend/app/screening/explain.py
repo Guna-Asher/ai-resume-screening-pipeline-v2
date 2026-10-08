@@ -31,7 +31,7 @@ def build_project_summaries(
         summaries.append(
             ProjectSummary(
                 name=project.name,
-                description=snippet(project.description, 300),
+                description=snippet(" · ".join(b for b in project.bullets if b), 300),  # display only
                 technologies=technologies,
                 ai_signals=list(unit.signals) if unit else [],
                 ai_depth_points=unit.score if unit else None,

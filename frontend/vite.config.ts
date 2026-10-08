@@ -17,7 +17,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    css: false,
+    css: true, // keep real stylesheet text available to the CSS guard tests
     restoreMocks: true,
   },
 });

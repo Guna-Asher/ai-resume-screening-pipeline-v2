@@ -158,8 +158,8 @@
 .legend li { display: flex; align-items: center; gap: 8px; }
 .legend-val { margin-left: auto; font-weight: 620; }
 .enrich { display: grid; gap: 6px; border-top: 1px solid var(--border); padding-top: 12px; font-size: 0.8125rem; }
-.enrich div { display: flex; justify-content: space-between; gap: 12px; }
-.enrich dt { color: var(--text-3); } .enrich dd { margin: 0; text-align: right; }
+.enrich div { display: flex; flex-direction: column; gap: 1px; }
+.enrich dt { color: var(--text-3); font-size: 0.75rem; } .enrich dd { margin: 0; }
 
 /* ---------- results body ---------- */
 .results-grid { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; align-items: start; }
@@ -181,7 +181,7 @@
 
 /* ---------- candidate card ---------- */
 .candidate {
-  width: 100%; text-align: left; display: flex; flex-direction: column; gap: 12px; padding: 16px 18px;
+  width: 100%; text-align: left; display: flex; flex-direction: column; align-items: stretch; gap: 12px; padding: 16px 18px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm);
   transition: border-color .15s, box-shadow .15s;
 }
@@ -283,8 +283,8 @@
 
 /* ---------- responsive ---------- */
 @media (max-width: 980px) {
-  .summary { grid-template-columns: 1fr; }
-  .results-grid { grid-template-columns: 1fr; gap: 16px; }
+  .summary { grid-template-columns: minmax(0, 1fr); }
+  .results-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .filters { position: static; }
   .tabs { flex-direction: row; overflow-x: auto; gap: 6px; padding-bottom: 2px; }
   .tab { flex: none; gap: 8px; border: 1px solid var(--border); background: var(--surface); }
@@ -298,7 +298,7 @@
   .brand-sub, .version { display: none; }
   .upload { padding: 18px; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .scores-compact { grid-template-columns: 1fr; }
+  .scores-compact { grid-template-columns: minmax(0, 1fr); }
   .candidate { padding: 14px; }
   .candidate-top { flex-wrap: wrap; row-gap: 6px; }
   .chevron { display: none; }

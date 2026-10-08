@@ -79,9 +79,10 @@ export default function App({ api = defaultApi }: { api?: ApiClient }) {
     } catch (err) {
       if (err instanceof ApiError && err.kind === 'aborted') {
         setStopped(true);
+      } else if (err instanceof ApiError && err.kind === 'offline') {
+        setHealth('unavailable'); // the "Backend unavailable" banner (with Retry) explains this
       } else {
         setError(err instanceof ApiError ? err.message : 'Something went wrong while processing. Please try again.');
-        if (err instanceof ApiError && err.kind === 'offline') setHealth('unavailable');
       }
       setPhase('upload'); // files stay selected
     } finally {

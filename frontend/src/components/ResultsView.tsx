@@ -102,7 +102,7 @@ export function ResultsView({ results, onReset }: { results: ScreeningResults; o
             </EmptyState>
           )}
 
-          {show('eligible') && !noMatches && (tab !== 'all' || eligible.length > 0) && (
+          {show('eligible') && !noMatches && (tab !== 'all' || eligible.length > 0 || (summary.eligible === 0 && !query)) && (
             <div className="group">
               <div className="group-head">
                 <h2>Ranked eligible candidates</h2>
