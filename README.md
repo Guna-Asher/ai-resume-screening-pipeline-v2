@@ -1,19 +1,22 @@
 # AI Resume Screening & Ranking
 
+Pipeline: `extract -> hard eligibility -> [eligible only: LLM semantic evidence, GitHub enrichment] -> deterministic score -> rank -> results.json`.
+
 Screens a batch of PDF resumes for Python + AI/LLM/RAG/agentic engineering ability: a hard eligibility
 filter first, then an explainable 100-point score for eligible candidates only. The output is a
 machine-readable `results.json`.
 
-## Current status: Step 2 (deterministic engine + advisory LLM semantic layer)
+## Current status: Step 3 (deterministic engine + advisory LLM layer + GitHub enrichment)
 
 | Implemented | Not implemented yet |
 |---|---|
-| PDF (and `.txt`/`.md`) ingestion, hashing, duplicate detection | GitHub API enrichment and activity scoring (score is `0`, status `not_evaluated`) |
+| PDF (and `.txt`/`.md`) ingestion, hashing, duplicate detection | Frontend dashboard, browser upload UI |
 | Field extraction: name, email, skills, projects, GitHub URL | OCR for scanned PDFs, `.docx` |
-| Hard eligibility rules (Python AND AI evidence) | Upload UI / frontend dashboard |
+| Hard eligibility rules (Python AND AI evidence) | Authentication |
 | Deterministic 100-point scoring + shallow-project penalty | API endpoints beyond `/health` |
 | Ranking, `results.json` contract, CLI, tests | Deployment |
 | Optional LLM semantic analysis behind a provider adapter (advisory evidence only) | |
+| Lightweight public GitHub enrichment, 0-10 points (never affects eligibility) | |
 
 No database, queue, auth or vector store is used or needed.
 
@@ -33,9 +36,9 @@ docker compose run --rm backend python main.py \
   --input /app/resumes \
   --output /app/output/results.json
 
-# deterministic-only run (never calls an LLM)
+# deterministic-only run (no LLM calls, no GitHub calls)
 docker compose run --rm backend python main.py \
-  --input /app/resumes --output /app/output/results.json --no-llm
+  --input /app/resumes --output /app/output/results.json --no-llm --no-github
 
 # API server (health check only for now) with auto-reload
 docker compose up           # then: curl localhost:8000/health
@@ -67,6 +70,8 @@ backend/
   app/
     api.py                minimal FastAPI app (/health)
     errors.py             structured pipeline errors (stage-tagged)
+    github/               client.py (HTTP), service.py (cache, concurrency, failure isolation),
+                          scoring.py (pure 0-10 rules), urls.py (link -> username), schemas.py, errors.py
     llm/                  adapter.py (provider boundary), client.py (analyzer: cache, concurrency,
                           failure isolation), schemas.py, prompts.py (versioned), errors.py
     config/               env settings (pydantic-settings), category weights
@@ -108,7 +113,7 @@ A candidate is eligible only if **both** hold:
    - a named *framework* in a skills list passes the gate (the "framework" route) but earns almost no score;
      techniques or generic terms listed only as skills do not pass.
 
-Java, JavaScript, React, Next.js, etc. never cause rejection. Missing GitHub never affects eligibility.
+Java, JavaScript, React, Next.js, etc. never cause rejection. Missing, private or unreachable GitHub never affects eligibility.
 Rejections state which side failed and why (e.g. `Only weak Python mentions found ... learning/tutorial context`).
 
 ## Scoring model (100 points, integers)
@@ -120,7 +125,7 @@ Rejected candidates are not scored. Every point appears in `score_evidence` with
 | AI / Agentic / RAG depth | 40 | Per project / work entry that mentions AI: 5 baseline + retrieval 7 + embeddings/vector store/chunking 4 + tool calling 5 + agents 6 + orchestration/state 5 + evaluation 5 + data/product logic 4 + backend integration 3. Result = best unit + 2 per *other* AI unit scoring >= 10 (cap 6) + 1 per AI framework/technique present only in skills (cap 3), capped at 40. AI mentions outside project/work sections are capped at 10. |
 | Python & backend | 30 | Python 12 (4 any qualifying evidence + 5 in a project + 3 in work) + web framework 5 + database 4 + async 3 + Redis 3 + backend implementation 3. A keyword only in a skills list earns reduced points (2/2/1/1/1 respectively). |
 | Cloud / deployment / full stack | 15 | cloud provider 4 + containers 3 + deployment/CI-CD 4 + frontend framework 2 + end-to-end system 2 (skills-list-only keywords earn 2/1/1/1/0). |
-| GitHub | 10 | `0`, `github_status: not_evaluated` (Step 1) |
+| GitHub | 10 | Recent activity 0-5 + repositories 0-5 from public GitHub data (see **GitHub Enrichment**). `0` when the link is missing/invalid or the API fails. |
 | Engineering depth | 5 | 1 each: testing, architecture, caching/queues, concurrency, logging/observability/failure handling (project/work evidence only). |
 
 `total_score = sum(categories) - penalty`, clamped to 0..100. All tables are in `rules.py`.
@@ -151,6 +156,85 @@ Each candidate has `matched_skills`, `project_summary`, `score_breakdown`, `gith
 
 `batch_summary`: `total_resumes = successfully_parsed + failed + duplicates`, and
 `successfully_parsed = eligible + rejected` (read, extracted and screened without error).
+
+## GitHub Enrichment
+
+**Why it is additional, not mandatory.** The assignment treats GitHub as a lightweight positive signal worth at most
+10 of 100 points. Many strong candidates have private work, company repos or no public account, so a missing link,
+a private/unknown profile or an API failure scores `0` GitHub points and changes nothing else: eligibility is decided
+*before* GitHub is consulted, and a candidate can never be rejected, dropped or made eligible by it.
+
+**Honest limits.** GitHub activity is an *approximate public signal*, not a measure of engineering ability. The public
+Events API only exposes recent activity (we read one page of up to 100 events) and is not a complete contribution
+history. Followers and stars are deliberately **not used**. No LLM is involved in GitHub scoring.
+
+**Flow.** Only *eligible* candidates are enriched (rejected candidates make no GitHub calls). Usernames are de-duplicated
+and cached for the run; each unique account costs at most two requests:
+`GET /users/{u}/repos?type=owner&sort=pushed&per_page=100` and `GET /users/{u}/events/public?per_page=100`.
+
+**Link normalisation** (`github/urls.py`). `https://github.com/u`, `https://www.github.com/u/`, `github.com/u` all
+become the username `u`. Repository links (`github.com/u/repo`) are not accepted as profiles by the normaliser. During
+resume extraction a repo-only link yields its owner only if *all* GitHub links on the resume share one owner; links to
+several owners (e.g. a framework's org) are ambiguous and no profile is inferred. A username is never guessed from a
+person's name.
+
+**Recent activity, 0-5** (`github/scoring.py`). Counted events in the last 90 days: pushes, pull requests, PR reviews and
+review comments, issues, issue comments, branch/tag/repo creation, releases. Stars, watches and forks are ignored.
+N = counted events, D = distinct active days; the highest satisfied tier applies:
+
+| Points | Condition |
+|---|---|
+| 5 | N >= 25 and D >= 4 |
+| 4 | N >= 12 and D >= 3 |
+| 3 | N >= 6 and D >= 2 |
+| 2 | N >= 3 |
+| 1 | N >= 1 |
+| 0 | no recent engineering events |
+
+**Repositories, 0-5.** Among the first 100 public repos owned by the user (most recently pushed first), a repo is
+*maintained* if it is not a fork, not archived, not empty and was pushed in the last 365 days.
+
+| Points | Condition |
+|---|---|
+| 0-2 | number of maintained repos (0 -> 0, 1 -> 1, 2 or more -> 2) |
+| +1 | a maintained repo has a description of >= 20 characters or topics |
+| +1 | a maintained repo is Python-relevant |
+| +1 | a maintained repo is AI-relevant |
+
+**Relevance** is detected on repo name, description, topics and primary language (no LLM). Python: language `Python`
+or terms such as python, fastapi, django, flask, asyncio, pydantic, pytest, pandas. AI: ai, llm, rag, langchain,
+langgraph, agent(s), agentic, embedding(s), vector search, machine learning, openai, gpt, chatbot, retrieval, ... The
+sets are the `python_terms` / `ai_terms` fields of `GitHubRules` and are matched on whole words. Up to 5 relevant repos
+are listed in the output.
+
+`github points = activity + repositories` (max 10). The score ledger shows `+N GitHub: recent public engineering activity`
+and `+N GitHub: maintained/relevant public repositories`, or `GitHub: 0 points - <reason>`.
+
+**Statuses** (`github_enrichment.status`): `ok`, `missing` (no link), `invalid_url`, `not_found` (404),
+`rate_limited` (429, or 403 with rate-limit signals), `timeout`, `api_error` (other HTTP errors, malformed responses,
+connection errors, rejected token), and `not_evaluated` (rejected candidate, or `--no-github`). Failures carry a short
+`reason` (e.g. `HTTP 500`); responses, tokens and payloads are never stored. `batch_summary.github_status_counts`
+aggregates them, and a non-`ok` status adds an informational note to `concerns`.
+
+**Rate limits and cost.** No automatic retries. After the first rate-limited response the enricher stops calling GitHub for
+the rest of the run (remaining accounts are reported `rate_limited` without a request), so a 50-resume batch cannot turn
+into hundreds of failing calls. Unauthenticated requests are limited to roughly 60 per hour per IP, i.e. about 30
+distinct accounts per hour at two requests each: set `GITHUB_TOKEN` for larger batches.
+
+**Caching and concurrency.** Results (including failures) are cached in memory per run by lower-cased username, so two
+resumes naming the same account cause one enrichment. Accounts are processed with an `asyncio.Semaphore`
+(`GITHUB_MAX_CONCURRENCY`, default 3; a user's two requests run sequentially, so at most that many requests are in
+flight). Enrichment runs in its own `asyncio.run` after the LLM phase, not nested inside it (the known limitation about
+calling the batch from inside a running event loop still applies when API endpoints are added).
+
+**Configuration.**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GITHUB_TOKEN` | empty | Optional. Sent as `Authorization: Bearer ...` only; never logged or serialised. Without it requests are unauthenticated. A fine-grained token with no permissions is enough. |
+| `GITHUB_API_BASE_URL` | `https://api.github.com` | Override for GitHub Enterprise or a test stub. |
+| `GITHUB_TIMEOUT_SECONDS` | `10` | Per-request timeout. |
+| `GITHUB_MAX_CONCURRENCY` | `3` | Simultaneous GitHub requests. |
 
 ## LLM Architecture
 
@@ -227,6 +311,8 @@ aggregates them. LLM-detected evidence carries `origin: "llm"` and quotes the re
   unexpected exceptions are logged with a traceback. Nothing is silently swallowed.
 - Duplicates are detected by file hash and by normalised-text hash; the first file (sorted path order) is kept.
 - Missing name/email/GitHub/projects are warnings surfaced in `concerns`, not errors.
+- GitHub failures (`not_found`, `rate_limited`, `timeout`, `api_error`, ...) are recorded per candidate with 0 GitHub points;
+  the candidate stays eligible and ranked on its other categories.
 - Optional PDF hyperlink extraction failures are logged and ignored, never fatal.
 
 ## Tests
@@ -240,7 +326,7 @@ adapter tests and a local OpenAI-style stub server (`tests/stub_llm_server.py`) 
 Covers eligibility (Python+AI, no Python, no AI, Java/React,
 tutorial mentions), scoring (skills-list frameworks, thin wrapper penalty, strong RAG/agentic), GitHub default,
 deterministic ranking and tie-breaks, per-resume failure isolation (corrupt PDF, unreadable file, exception in
-scoring), duplicates, PDF ingestion, and the JSON contract round trip. LLM tests cover: valid / fenced / malformed / schema-invalid replies, timeout and API
+scoring), duplicates, PDF ingestion, and the JSON contract round trip. GitHub tests (fake transport, no live GitHub) cover URL normalisation, activity/repository scoring and relevance, 404 / rate limit / timeout / API errors, token handling, caching, bounded concurrency, score caps, rejected candidates making no calls, failure preservation and stable ranking. LLM tests cover: valid / fenced / malformed / schema-invalid replies, timeout and API
 errors, missing key or model, caching, bounded concurrency, shallow-chatbot / RAG / stateful-agent responses,
 grounding, no double counting, failure preserving the deterministic score, and rejected candidates never reaching the model.
 
@@ -261,8 +347,9 @@ grounding, no double counting, failure preserving the deterministic score, and r
   full credit. Thin wrappers are penalised, but only when *no* AI project shows depth.
 - **LLM placement.** Hard eligibility and the final score stay deterministic. The LLM runs only after the eligibility gate,
   its output is untrusted until grounded in the resume text, and it can only add evidence.
-- **GitHub later.** An enrichment adapter will fill `github_enrichment` and the 10-point category from the extracted
-  `github_url`; failures will yield a status (not an exception) and never affect eligibility.
+- **GitHub.** An isolated adapter fills `github_enrichment` and the 10-point category for eligible candidates only, after
+  the gate. Pure deterministic rules turn public metadata into points (no stars/followers, no LLM); failures yield a
+  status, never an exception or a rejection.
 
 ## If I Had More Time
 
@@ -270,6 +357,7 @@ grounding, no double counting, failure preserving the deterministic score, and r
 - Better PDF layout handling (multi-column resumes, OCR for scanned PDFs) and `.docx` support.
 - Let semantic analysis also *veto* keyword-only false positives (currently it can only add evidence), and add a retry/backoff
   policy for rate limits plus a native Anthropic adapter.
+- Use GitHub GraphQL contribution counts (needs a token) for a fuller activity picture, and weigh repo content (README/tests) rather than metadata alone.
 - Decide how to treat classic ML/NLP/CV projects (currently not AI evidence) with the hiring team.
 
 ## Known limitations
@@ -279,4 +367,6 @@ grounding, no double counting, failure preserving the deterministic score, and r
 - A very sparse resume can floor at a total of 0 after the shallow-project penalty.
 - Semantic grounding checks that a quote exists in the resume, not that it truly supports the claimed signal; a resume
   containing prompt-injection text can still present misleading (but real) lines. Only the LLM-added share of the score is exposed to this.
-- The LLM step uses `asyncio.run` and must not be called from inside a running event loop (relevant when API endpoints are added).
+- The LLM and GitHub steps each use `asyncio.run` and must not be called from inside a running event loop (relevant when API endpoints are added).
+- GitHub sees only one page (100) of public events and repos, so very prolific accounts are slightly under-counted, and `public_repositories` counts at most 100. Repo-name/description keyword relevance can mislabel repos.
+- A single repository link on a resume is trusted to belong to the candidate when it is the only owner mentioned.

@@ -39,14 +39,21 @@ def extract_github_urls(text: str) -> list[str]:
 
 
 def extract_github_profile(text: str) -> str | None:
-    """Profile URL of the candidate: a bare profile link, else the owner of a repo link."""
+    """Profile URL of the candidate.
+
+    A bare profile link wins. With only repository links, the owner is used only when every
+    repo link has the same owner; links to several owners (e.g. a framework's org) are
+    ambiguous, so no profile is inferred.
+    """
     urls = extract_github_urls(text)
     for url in urls:
         if url.count("/") == 3:  # https://github.com/user
             return url
-    if urls:
-        return "/".join(urls[0].split("/")[:4])
-    return None
+    owners: dict[str, str] = {}
+    for url in urls:
+        profile = "/".join(url.split("/")[:4])
+        owners.setdefault(profile.lower(), profile)  # keep the first spelling seen
+    return next(iter(owners.values())) if len(owners) == 1 else None
 
 
 def extract_name(lines: list[str]) -> str | None:

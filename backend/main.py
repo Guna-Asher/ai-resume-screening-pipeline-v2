@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from app.config import load_settings
+from app.github import GitHubEnricher
 from app.llm import SemanticAnalyzer
 from app.screening.batch import BatchProcessor
 
@@ -16,6 +17,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path, help="path of results.json to write")
     parser.add_argument(
         "--no-llm", action="store_true", help="deterministic screening only; skip LLM analysis"
+    )
+    parser.add_argument(
+        "--no-github", action="store_true", help="skip GitHub enrichment (GitHub scores 0)"
     )
     return parser.parse_args(argv)
 
@@ -36,8 +40,16 @@ def main(argv: list[str] | None = None) -> int:
                 analyzer.unavailable_reason,
             )
 
+    github = None
+    if not args.no_github:
+        github = GitHubEnricher.from_settings(settings)
+        if not github.authenticated:
+            logging.getLogger("main").info(
+                "GITHUB_TOKEN not set: unauthenticated GitHub requests (low rate limit)"
+            )
+
     try:
-        results = BatchProcessor(analyzer=analyzer).process_directory(args.input)
+        results = BatchProcessor(analyzer=analyzer, github=github).process_directory(args.input)
     except NotADirectoryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -51,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{s.failed} failed, {s.duplicates} duplicates -> {args.output}"
     )
     print(f"LLM analysis: {s.llm_status_counts or 'none'}")
+    print(f"GitHub enrichment: {s.github_status_counts or 'none'}")
     return 0
 
 

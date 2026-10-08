@@ -3,7 +3,13 @@
 import logging
 
 from app.llm import SemanticOutcome
-from app.models import Candidate, CandidateResult, GitHubEnrichment, LLMEnrichment
+from app.models import (
+    Candidate,
+    CandidateResult,
+    GitHubEnrichment,
+    GitHubStatus,
+    LLMEnrichment,
+)
 from app.screening.ai_depth import analyze_units
 from app.screening.eligibility import check_eligibility
 from app.screening.explain import (
@@ -43,10 +49,23 @@ def _prepare_semantic(
     )
 
 
+def _github_concerns(github: GitHubEnrichment) -> list[str]:
+    """Informational only: a GitHub problem never changes eligibility or other categories."""
+    if github.status in (GitHubStatus.OK, GitHubStatus.NOT_EVALUATED, GitHubStatus.MISSING):
+        return []  # a missing link is already reported by the explain step
+    return [f"GitHub not scored ({github.status.value}); 0 GitHub points, candidate otherwise unaffected"]
+
+
 def screen_candidate(
-    candidate: Candidate, semantic: SemanticOutcome | None = None
+    candidate: Candidate,
+    semantic: SemanticOutcome | None = None,
+    github: GitHubEnrichment | None = None,
 ) -> CandidateResult:
-    """``semantic`` is the optional LLM outcome. It is only consulted for eligible candidates."""
+    """Eligibility gate, then scoring for eligible candidates.
+
+    ``semantic`` (LLM) and ``github`` (public GitHub signal) are optional and are only
+    consulted after the candidate has passed the deterministic eligibility gate.
+    """
     eligibility = check_eligibility(candidate)
     base = {
         "resume_filename": candidate.resume_filename,
@@ -56,7 +75,6 @@ def screen_candidate(
         "github_url": candidate.github_url,
         "eligibility": eligibility,
         "matched_skills": eligibility.matched_skills,
-        "github_enrichment": GitHubEnrichment(profile_url=candidate.github_url),
     }
 
     if not eligibility.eligible:
@@ -67,12 +85,26 @@ def screen_candidate(
             project_summary=build_project_summaries(candidate, None),
             concerns=list(candidate.parse_warnings),
             llm_enrichment=LLMEnrichment(status="skipped", reason="not_eligible"),
+            github_enrichment=GitHubEnrichment(
+                reason="not_eligible",
+                profile_url=candidate.github_url,
+                summary="GitHub not checked: candidate is not eligible.",
+            ),
         )
 
     signals, enrichment = _prepare_semantic(candidate, semantic)
     units = analyze_units(candidate.lines, signals)
-    score = score_candidate(candidate, eligibility, signals)
+    if github is None:
+        github = GitHubEnrichment(
+            reason="github_disabled",
+            profile_url=candidate.github_url,
+            summary="GitHub enrichment was not run.",
+        )
+    score = score_candidate(candidate, eligibility, signals, github)
     strengths, concerns = build_strengths_and_concerns(candidate, score, units)
+    concerns.extend(_github_concerns(github))
+    if github.status == GitHubStatus.OK and github.total_points >= 6:
+        strengths.append(f"Active, relevant public GitHub presence ({github.total_points}/10)")
     if signals:
         concerns.extend(semantic_concerns(signals))
     return CandidateResult(
@@ -83,4 +115,5 @@ def screen_candidate(
         strengths=strengths,
         concerns=concerns,
         llm_enrichment=enrichment,
+        github_enrichment=github,
     )

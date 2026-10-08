@@ -27,13 +27,40 @@ class EligibilityResult(BaseModel):
 
 
 class GitHubStatus(StrEnum):
-    NOT_EVALUATED = "not_evaluated"
+    NOT_EVALUATED = "not_evaluated"  # enrichment off, or candidate not eligible
+    MISSING = "missing"  # no GitHub link on the resume
+    INVALID_URL = "invalid_url"  # a link exists but is not a usable profile URL
+    OK = "ok"
+    NOT_FOUND = "not_found"
+    RATE_LIMITED = "rate_limited"
+    TIMEOUT = "timeout"
+    API_ERROR = "api_error"
+
+
+class RelevantRepository(BaseModel):
+    name: str
+    language: str | None = None
+    relevance: list[str] = Field(default_factory=list)  # e.g. ["python", "rag"]
+    updated_at: str | None = None
+    html_url: str | None = None
 
 
 class GitHubEnrichment(BaseModel):
+    """Lightweight public-GitHub signal (0-10). Never required for eligibility."""
+
     status: GitHubStatus = GitHubStatus.NOT_EVALUATED
+    reason: str | None = None  # short, non-sensitive detail (e.g. "HTTP 500", "not_eligible")
     profile_url: str | None = None
+    username: str | None = None
+    recent_activity_points: int = Field(default=0, ge=0, le=5)
+    repository_points: int = Field(default=0, ge=0, le=5)
+    total_points: int = Field(default=0, ge=0, le=GITHUB_MAX)
+    public_repositories: int | None = None  # among the first 100 public repos fetched
+    maintained_repositories: int | None = None
+    recent_engineering_events: int | None = None
+    relevant_repositories: list[RelevantRepository] = Field(default_factory=list)  # capped
     summary: str | None = "GitHub enrichment has not been evaluated yet."
+    evidence: list[str] = Field(default_factory=list)
 
 
 class Penalty(BaseModel):
@@ -167,6 +194,7 @@ class BatchSummary(BaseModel):
     failed: int
     duplicates: int
     llm_status_counts: dict[str, int] = Field(default_factory=dict)  # ok/failed/unavailable/skipped
+    github_status_counts: dict[str, int] = Field(default_factory=dict)  # ok/missing/not_found/...
 
 
 class ScreeningResults(BaseModel):

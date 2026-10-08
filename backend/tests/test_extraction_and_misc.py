@@ -54,3 +54,10 @@ def test_health_endpoint():
     from app.api import app
 
     assert TestClient(app).get("/health").json()["status"] == "ok"
+
+
+def test_repo_links_to_several_owners_do_not_define_a_profile():
+    text = "github.com/langchain-ai/langchain and github.com/jane/mine"
+    assert extract_github_profile(text) is None
+    assert extract_github_profile("github.com/jane/a github.com/Jane/b") == "https://github.com/jane"
+    assert extract_github_profile("github.com/other/x github.com/jane  github.com/jane/b") == "https://github.com/jane"

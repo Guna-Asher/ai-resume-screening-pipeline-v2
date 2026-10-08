@@ -33,8 +33,11 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     llm_max_concurrency: int = Field(default=3, ge=1, le=32)
 
-    # Used from a later step (GitHub enrichment).
+    # GitHub enrichment (public REST API). The token is optional: it only raises rate limits.
     github_token: SecretStr | None = None
+    github_api_base_url: str = "https://api.github.com"
+    github_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    github_max_concurrency: int = Field(default=3, ge=1, le=16)
 
 
 def load_settings() -> Settings:

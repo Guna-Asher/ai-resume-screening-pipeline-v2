@@ -6,7 +6,8 @@
                            + Redis 3 + backend implementation 3
     cloud_fullstack   15   cloud provider 4 + containers 3 + deployment 4
                            + frontend framework 2 + end-to-end system 2
-    github            10   0 for now (status: not_evaluated)
+    github            10   GitHub enrichment (github/scoring.py): recent activity 0-5 + repositories 0-5;
+                           0 when missing / failed / not evaluated (never affects eligibility)
     engineering_depth  5   1 each: testing, architecture, caching/queues,
                            concurrency, reliability/observability
 
@@ -21,12 +22,15 @@ full points.
 from app.config.scoring import (
     CLOUD_FULLSTACK_MAX,
     ENGINEERING_DEPTH_MAX,
+    GITHUB_MAX,
     PYTHON_BACKEND_MAX,
 )
 from app.models import (
     Candidate,
     EligibilityResult,
     EvidenceSource,
+    GitHubEnrichment,
+    GitHubStatus,
     ScoreBreakdown,
     ScoreItem,
     Strength,
@@ -65,15 +69,49 @@ def _sum(items: list[ScoreItem], cap: int) -> int:
     return min(cap, sum(i.points for i in items))
 
 
+def _github_items(github: GitHubEnrichment | None) -> list[ScoreItem]:
+    """Ledger lines for the GitHub category (always present, so zero points are explained)."""
+    if github is not None and github.status == GitHubStatus.OK:
+        return [
+            ScoreItem(
+                category="github",
+                signal="recent_activity",
+                points=github.recent_activity_points,
+                max_points=5,
+                explanation="GitHub: recent public engineering activity - "
+                + (github.evidence[0] if github.evidence else ""),
+            ),
+            ScoreItem(
+                category="github",
+                signal="repository_signals",
+                points=github.repository_points,
+                max_points=5,
+                explanation="GitHub: maintained/relevant public repositories - "
+                + "; ".join(github.evidence[1:3]),
+            ),
+        ]
+    if github is None or github.status == GitHubStatus.NOT_EVALUATED:
+        why = "GitHub enrichment not evaluated; scored 0 and not counted against the candidate"
+    else:
+        why = github.summary or f"GitHub: 0 points - {github.status.value}"
+    return [
+        ScoreItem(
+            category="github", signal="github_activity", points=0, max_points=GITHUB_MAX,
+            explanation=why,
+        )
+    ]
+
+
 def score_candidate(
     candidate: Candidate,
     eligibility: EligibilityResult,
     semantic: SemanticSignals | None = None,
+    github: GitHubEnrichment | None = None,
 ) -> ScoreBreakdown:
     """Score an *eligible* candidate. Rejected candidates are never scored.
 
-    ``semantic`` is optional advisory evidence (see ``semantic.py``); without it the
-    result is exactly the rule-based Step-1 score.
+    ``semantic`` is optional advisory evidence (see ``semantic.py``); ``github`` is the optional
+    public-GitHub signal (0-10). Without either, the result is exactly the rule-based score.
     """
     lines = candidate.lines
     units = analyze_units(lines, semantic)
@@ -92,20 +130,16 @@ def score_candidate(
         "engineering_depth", rules.ENGINEERING_SIGNALS, lines, hits("engineering_depth")
     )
 
-    github_item = ScoreItem(
-        category="github",
-        signal="github_activity",
-        points=0,
-        max_points=10,
-        explanation="GitHub enrichment not evaluated yet; scored 0 and not counted against eligibility",
-    )
+    github_items = _github_items(github)
     penalty = shallow_penalty(units, semantic)
 
     return ScoreBreakdown.build(
         ai_project_depth=ai_points,
         python_backend=_sum(py_items, PYTHON_BACKEND_MAX),
         cloud_fullstack=_sum(cloud_items, CLOUD_FULLSTACK_MAX),
+        github=min(GITHUB_MAX, github.total_points) if github else 0,
+        github_status=github.status if github else GitHubStatus.NOT_EVALUATED,
         engineering_depth=_sum(eng_items, ENGINEERING_DEPTH_MAX),
         penalties=[penalty] if penalty else [],
-        score_evidence=[*ai_items, *py_items, *cloud_items, github_item, *eng_items],
+        score_evidence=[*ai_items, *py_items, *cloud_items, *github_items, *eng_items],
     )
