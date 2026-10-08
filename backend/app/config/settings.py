@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         env_file=(_PROJECT_ROOT / ".env", _BACKEND_DIR / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
+        env_ignore_empty=True,
     )
 
     python_env: str = "development"

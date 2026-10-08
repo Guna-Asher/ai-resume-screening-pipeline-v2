@@ -1,0 +1,20 @@
+# Backend only. The host needs nothing but Docker + Docker Compose.
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    # Optional: copy .env.example to .env to configure. Never baked into the image.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # Source is mounted so code changes need no rebuild (only requirements.txt does).
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - ./backend/main.py:/app/main.py
+      - ./backend/pytest.ini:/app/pytest.ini
+      # Data folders shared with the host.
+      - ./resumes:/app/resumes
+      - ./output:/app/output
+    command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
