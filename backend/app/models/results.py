@@ -114,6 +114,22 @@ class ProjectSummary(BaseModel):
     ai_signals: list[str] = Field(default_factory=list)
     ai_depth_points: int | None = None  # None for rejected candidates (not scored)
     shallow: bool | None = None
+    # Advisory semantic analysis (only when an LLM analysed the candidate successfully)
+    semantic_summary: str | None = None
+    semantic_depth: str | None = None
+    semantic_shallow_wrapper: bool | None = None
+
+
+class LLMEnrichment(BaseModel):
+    """Outcome of the optional LLM semantic analysis. Never contains raw model output."""
+
+    status: Literal["ok", "failed", "unavailable", "skipped"] = "skipped"
+    reason: str | None = "not_requested"  # failure category / why skipped
+    model: str | None = None
+    signals_accepted: int = 0
+    rejected_signals: dict[str, int] = Field(default_factory=dict)  # reason -> count
+    overall_evidence: list[str] = Field(default_factory=list)
+    confidence_notes: list[str] = Field(default_factory=list)
 
 
 class CandidateResult(BaseModel):
@@ -132,6 +148,7 @@ class CandidateResult(BaseModel):
     project_summary: list[ProjectSummary] = Field(default_factory=list)
     score_breakdown: ScoreBreakdown | None = None  # None unless eligible
     github_enrichment: GitHubEnrichment = Field(default_factory=GitHubEnrichment)
+    llm_enrichment: LLMEnrichment = Field(default_factory=LLMEnrichment)
     strengths: list[str] = Field(default_factory=list)
     concerns: list[str] = Field(default_factory=list)
 
@@ -149,6 +166,7 @@ class BatchSummary(BaseModel):
     rejected: int
     failed: int
     duplicates: int
+    llm_status_counts: dict[str, int] = Field(default_factory=dict)  # ok/failed/unavailable/skipped
 
 
 class ScreeningResults(BaseModel):

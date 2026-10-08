@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.screening import rules
 from app.screening.ai_depth import analyze_units, score_ai_depth, shallow_penalty
+from app.screening.semantic import SemanticSignals
 from app.screening.signals import score_signal_rules
 
 
@@ -64,17 +65,32 @@ def _sum(items: list[ScoreItem], cap: int) -> int:
     return min(cap, sum(i.points for i in items))
 
 
-def score_candidate(candidate: Candidate, eligibility: EligibilityResult) -> ScoreBreakdown:
-    """Score an *eligible* candidate. Rejected candidates are never scored."""
+def score_candidate(
+    candidate: Candidate,
+    eligibility: EligibilityResult,
+    semantic: SemanticSignals | None = None,
+) -> ScoreBreakdown:
+    """Score an *eligible* candidate. Rejected candidates are never scored.
+
+    ``semantic`` is optional advisory evidence (see ``semantic.py``); without it the
+    result is exactly the rule-based Step-1 score.
+    """
     lines = candidate.lines
-    units = analyze_units(lines)
+    units = analyze_units(lines, semantic)
+
+    def hits(category: str):
+        return semantic.rule_hits.get(category) if semantic else None
 
     ai_points, ai_items = score_ai_depth(lines, units)
     py_items = [_score_python(eligibility)] + score_signal_rules(
-        "python_backend", rules.BACKEND_SIGNALS, lines
+        "python_backend", rules.BACKEND_SIGNALS, lines, hits("python_backend")
     )
-    cloud_items = score_signal_rules("cloud_fullstack", rules.CLOUD_SIGNALS, lines)
-    eng_items = score_signal_rules("engineering_depth", rules.ENGINEERING_SIGNALS, lines)
+    cloud_items = score_signal_rules(
+        "cloud_fullstack", rules.CLOUD_SIGNALS, lines, hits("cloud_fullstack")
+    )
+    eng_items = score_signal_rules(
+        "engineering_depth", rules.ENGINEERING_SIGNALS, lines, hits("engineering_depth")
+    )
 
     github_item = ScoreItem(
         category="github",
@@ -83,7 +99,7 @@ def score_candidate(candidate: Candidate, eligibility: EligibilityResult) -> Sco
         max_points=10,
         explanation="GitHub enrichment not evaluated yet; scored 0 and not counted against eligibility",
     )
-    penalty = shallow_penalty(units)
+    penalty = shallow_penalty(units, semantic)
 
     return ScoreBreakdown.build(
         ai_project_depth=ai_points,

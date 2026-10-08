@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -56,3 +57,4 @@ class Evidence(BaseModel):
     strength: Strength
     context: str | None = None  # e.g. project name
     note: str | None = None  # why the strength was downgraded, etc.
+    origin: Literal["rules", "llm"] = "rules"  # who detected it; text is always resume text

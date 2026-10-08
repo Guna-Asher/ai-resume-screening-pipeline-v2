@@ -7,7 +7,7 @@ Secrets are held as ``SecretStr`` so they never show up in ``repr`` or logs.
 
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -25,10 +25,13 @@ class Settings(BaseSettings):
     python_env: str = "development"
     log_level: str = "INFO"
 
-    # Used from a later step (LLM semantic extraction behind a provider adapter).
-    llm_provider: str | None = None
+    # Optional LLM semantic analysis (advisory evidence only). Unset => deterministic-only run.
+    llm_provider: str | None = None  # openrouter | openai | openai_compatible
     llm_model: str | None = None
     llm_api_key: SecretStr | None = None
+    llm_base_url: str | None = None  # overrides the provider's default endpoint
+    llm_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    llm_max_concurrency: int = Field(default=3, ge=1, le=32)
 
     # Used from a later step (GitHub enrichment).
     github_token: SecretStr | None = None

@@ -57,3 +57,16 @@ def make_evidence(
         context=line.project,
         note=weak_note(line) if strength == Strength.WEAK else None,
     )
+
+
+CLAIMS_LABEL = "Claims outside project/work sections"
+WORK_LABEL = "Work experience"
+
+
+def unit_key(line: ResumeLine) -> tuple[str, str]:
+    """Scoring unit a line belongs to: (kind, label) for a project, work entries, or claims."""
+    if line.source == EvidenceSource.PROJECT:
+        return "project", line.project or "Untitled project"
+    if line.source == EvidenceSource.EXPERIENCE:
+        return "work", WORK_LABEL
+    return "claims", CLAIMS_LABEL

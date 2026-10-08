@@ -6,6 +6,7 @@ from app.extraction.text import snippet
 from app.models import Candidate, ProjectSummary, ScoreBreakdown
 from app.screening import rules
 from app.screening.ai_depth import UnitAnalysis
+from app.screening.semantic import SemanticSignals
 
 
 def _points(score: ScoreBreakdown, category: str, signal: str) -> int:
@@ -15,7 +16,9 @@ def _points(score: ScoreBreakdown, category: str, signal: str) -> int:
 
 
 def build_project_summaries(
-    candidate: Candidate, units: Sequence[UnitAnalysis] | None
+    candidate: Candidate,
+    units: Sequence[UnitAnalysis] | None,
+    semantic: SemanticSignals | None = None,
 ) -> list[ProjectSummary]:
     """``units`` is None for rejected candidates: no AI scoring is attached."""
     by_label = {u.label: u for u in units or [] if u.kind == "project"}
@@ -24,6 +27,7 @@ def build_project_summaries(
         detected = [n for n, p in rules.SUPPORTING_SKILLS if p.search(project.name + " " + project.description)]
         technologies = list(dict.fromkeys([*project.technologies, *detected]))
         unit = by_label.get(project.name)
+        analysis = semantic.match_project(project.name) if semantic else None
         summaries.append(
             ProjectSummary(
                 name=project.name,
@@ -32,6 +36,9 @@ def build_project_summaries(
                 ai_signals=list(unit.signals) if unit else [],
                 ai_depth_points=unit.score if unit else None,
                 shallow=unit.shallow if unit and unit.is_ai else None,
+                semantic_summary=analysis.summary or None if analysis else None,
+                semantic_depth=analysis.depth_assessment if analysis else None,
+                semantic_shallow_wrapper=analysis.shallow_wrapper if analysis else None,
             )
         )
     return summaries
@@ -79,3 +86,8 @@ def build_strengths_and_concerns(
         concerns.append("No GitHub URL found on the resume")
     concerns.extend(candidate.parse_warnings)
     return strengths, concerns
+
+
+def semantic_concerns(semantic: SemanticSignals, limit: int = 4) -> list[str]:
+    """Advisory, clearly-labelled concerns reported by the LLM."""
+    return [f"(LLM) {c}" for c in semantic.concerns[:limit]]

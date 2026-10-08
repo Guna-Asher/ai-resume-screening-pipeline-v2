@@ -44,10 +44,9 @@ from app.models import (
 )
 from app.screening import rules
 from app.screening.ai_evidence import ai_strength, matching_terms
-from app.screening.context import Role, classify_line, make_evidence
+from app.screening.context import Role, classify_line, make_evidence, unit_key
+from app.screening.semantic import SemanticHit, SemanticSignals, hit_evidence
 
-CLAIMS_LABEL = "Claims outside project/work sections"
-WORK_LABEL = "Work experience"
 SHALLOW_CODE = "shallow_ai_project"
 
 
@@ -60,6 +59,7 @@ class UnitAnalysis:
     strong_signals: int = 0
     supporting_signals: int = 0
     ai_terms: list[str] = field(default_factory=list)
+    semantic_signals: list[str] = field(default_factory=list)  # depth signals added by the LLM
     evidence: list[Evidence] = field(default_factory=list)
 
     @property
@@ -71,24 +71,32 @@ class UnitAnalysis:
         return self.is_ai and self.strong_signals == 0
 
 
-def _unit_key(line: ResumeLine) -> tuple[str, str]:
-    if line.source == EvidenceSource.PROJECT:
-        return "project", line.project or "Untitled project"
-    if line.source == EvidenceSource.EXPERIENCE:
-        return "work", WORK_LABEL
-    return "claims", CLAIMS_LABEL
+def analyze_units(
+    lines: Sequence[ResumeLine], semantic: SemanticSignals | None = None
+) -> list[UnitAnalysis]:
+    """Group lines into units and score each.
 
-
-def analyze_units(lines: Sequence[ResumeLine]) -> list[UnitAnalysis]:
+    ``semantic`` (optional, advisory) can only ADD grounded signals to a unit; the
+    rule-based signals are always kept, so a failed/absent LLM changes nothing.
+    """
     grouped: dict[tuple[str, str], list[ResumeLine]] = {}
     for line in lines:
         role = classify_line(line)
         if role in (Role.PROJECT_WORK, Role.CUED):
-            grouped.setdefault(_unit_key(line), []).append(line)
-    return [_analyze_unit(kind, label, unit) for (kind, label), unit in grouped.items()]
+            grouped.setdefault(unit_key(line), []).append(line)
+    return [
+        _analyze_unit(kind, label, unit, semantic.ai_depth.get((kind, label), {}) if semantic else {})
+        for (kind, label), unit in grouped.items()
+    ]
 
 
-def _analyze_unit(kind: str, label: str, unit_lines: list[ResumeLine]) -> UnitAnalysis:
+# Semantic hits that alone do not make a unit an "AI unit" (they are supporting logic).
+_SUPPORT_ONLY = {"data_product_logic", "backend_integration"}
+
+
+def _analyze_unit(
+    kind: str, label: str, unit_lines: list[ResumeLine], hits: dict[str, SemanticHit]
+) -> UnitAnalysis:
     unit = UnitAnalysis(label=label, kind=kind)
     text = " \n".join(line.text for line in unit_lines)
 
@@ -99,18 +107,28 @@ def _analyze_unit(kind: str, label: str, unit_lines: list[ResumeLine]) -> UnitAn
                 unit.evidence.append(
                     make_evidence(term.category, term.name, line, ai_strength(term, classify_line(line)))
                 )
+    establishing = [h for name, h in hits.items() if name not in _SUPPORT_ONLY]
+    if not unit.is_ai and establishing:
+        unit.ai_terms.append("LLM usage (semantic)")
+        unit.evidence.append(hit_evidence(establishing[0], EvidenceCategory.LLM_USAGE))
     if not unit.is_ai:
         return unit
 
     score = rules.BASELINE_POINTS
     for signal in rules.DEPTH_SIGNALS:
-        if signal.pattern.search(text):
-            score += signal.points
-            unit.signals.append(signal.name)
-            if signal.strong:
-                unit.strong_signals += 1
-            else:
-                unit.supporting_signals += 1
+        by_rules = bool(signal.pattern.search(text))
+        hit = hits.get(signal.name)
+        if not (by_rules or hit):
+            continue
+        score += signal.points  # each depth signal counts once per unit, whoever found it
+        unit.signals.append(signal.name)
+        if signal.strong:
+            unit.strong_signals += 1
+        else:
+            unit.supporting_signals += 1
+        if hit and not by_rules:
+            unit.semantic_signals.append(signal.name)
+            unit.evidence.append(hit_evidence(hit, EvidenceCategory.AI_TECHNIQUE))
     unit.score = min(score, rules.CLAIMS_UNIT_CAP) if kind == "claims" else score
     return unit
 
@@ -145,7 +163,10 @@ def score_ai_depth(
                 max_points=AI_PROJECT_DEPTH_MAX,
                 explanation=(
                     f"'{best.label}': baseline {rules.BASELINE_POINTS} for AI usage"
-                    + "".join(f" + {s}" for s in best.signals)
+                    + "".join(
+                        f" + {s}" + (" (semantic)" if s in best.semantic_signals else "")
+                        for s in best.signals
+                    )
                     + (" (capped: claims outside project/work)" if best.kind == "claims" else "")
                 ),
                 evidence=best.evidence[:6],
@@ -195,7 +216,9 @@ def score_ai_depth(
     return min(AI_PROJECT_DEPTH_MAX, total), items
 
 
-def shallow_penalty(units: Sequence[UnitAnalysis]) -> Penalty | None:
+def shallow_penalty(
+    units: Sequence[UnitAnalysis], semantic: SemanticSignals | None = None
+) -> Penalty | None:
     ai_units = [u for u in units if u.is_ai]
     if not ai_units or any(not u.shallow for u in ai_units):
         return None
@@ -205,6 +228,9 @@ def shallow_penalty(units: Sequence[UnitAnalysis]) -> Penalty | None:
         best.supporting_signals, rules.SHALLOW_PENALTY_DEFAULT
     )
     has_support = f" (only supporting signals: {', '.join(best.signals)})" if best.signals else ""
+    corroborated = [u.label for u in ai_units if semantic and semantic.flags_shallow(u.label)]
+    if corroborated:
+        has_support += "; semantic analysis also judged it a shallow wrapper"
     return Penalty(
         code=SHALLOW_CODE,
         amount=amount,

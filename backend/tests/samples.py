@@ -131,3 +131,23 @@ PROJECTS
 Weather App
 • Built a weather dashboard using Python and Flask
 """
+
+# Wording the keyword rules cannot recognise as retrieval / embeddings / testing,
+# so only semantic analysis can lift its score (and remove the shallow penalty).
+PARAPHRASED_RAG = """\
+Kim Lee
+kim@example.com
+
+SKILLS
+Python
+
+PROJECTS
+Policy Assistant
+• Built a question-answering service over company PDFs that finds relevant passages by comparing dense vectors, using the OpenAI API
+• Wrote checks that run on every commit
+"""
+
+PARAPHRASED_RAG_QUOTE = (
+    "Built a question-answering service over company PDFs that finds relevant "
+    "passages by comparing dense vectors, using the OpenAI API"
+)
