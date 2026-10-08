@@ -28,6 +28,7 @@ export default function App({ api = defaultApi }: { api?: ApiClient }) {
   const [stopped, setStopped] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const processedCount = useRef(0);
+  const inFlight = useRef(false); // synchronous guard: state alone cannot stop same-tick double submits
 
   const checkHealth = useCallback(async () => {
     setHealth('checking');
@@ -64,7 +65,8 @@ export default function App({ api = defaultApi }: { api?: ApiClient }) {
   };
 
   const process = async () => {
-    if (files.length === 0 || phase === 'processing') return;
+    if (files.length === 0 || inFlight.current) return;
+    inFlight.current = true;
     const abort = new AbortController();
     controller.current = abort;
     processedCount.current = files.length;
@@ -87,6 +89,7 @@ export default function App({ api = defaultApi }: { api?: ApiClient }) {
       setPhase('upload'); // files stay selected
     } finally {
       controller.current = null;
+      inFlight.current = false;
     }
   };
 

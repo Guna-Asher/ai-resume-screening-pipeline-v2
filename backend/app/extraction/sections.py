@@ -82,15 +82,18 @@ def _normalize_heading(text: str) -> str:
 def match_heading(line: str) -> tuple[EvidenceSource, str, str] | None:
     """Return (kind, heading, remainder-on-same-line) if ``line`` starts a section."""
     stripped = line.strip()
-    if not stripped or len(stripped) > 60 or _BULLET_START.match(stripped):
+    if not stripped or _BULLET_START.match(stripped):
         return None
 
+    # "Skills: Python, Java, ..." - the label is short, but the rest of the line can be long.
     inline = _INLINE_RE.match(stripped)
     if inline:
         key = _normalize_heading(inline.group(1))
         if key in _ALIASES and key not in _STANDALONE_ONLY:
             return _ALIASES[key], inline.group(1).strip(), inline.group(2).strip()
 
+    if len(stripped) > 60:  # a standalone heading is short
+        return None
     key = _normalize_heading(stripped)
     if key in _ALIASES:
         return _ALIASES[key], stripped.rstrip(":").strip(), ""

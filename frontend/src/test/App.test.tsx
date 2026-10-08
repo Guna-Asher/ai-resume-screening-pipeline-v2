@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import App from '../App';
@@ -144,6 +144,17 @@ describe('processing', () => {
 
     resolve(results());
     expect(await screen.findByRole('heading', { name: 'Resume Screening' })).toBeInTheDocument();
+  });
+
+  it('submits only once even when Process is activated several times in the same tick', async () => {
+    const screenFn = vi.fn().mockReturnValue(new Promise(() => undefined)); // never resolves
+    const u = user();
+    render(<App api={makeApi({ screen: screenFn })} />);
+    await screen.findByText('Backend connected');
+    await selectFiles(u, [pdf('a.pdf')]);
+    const button = screen.getByRole('button', { name: 'Process Resumes' });
+    act(() => { button.click(); button.click(); button.click(); });
+    expect(screenFn).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the selection and shows a safe, retryable error when processing fails', async () => {

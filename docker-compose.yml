@@ -25,6 +25,8 @@ services:
       # Data folders shared with the host.
       - ./resumes:/app/resumes
       - ./output:/app/output
+      # Synthetic demo resumes (committed) so a reviewer can run the pipeline immediately.
+      - ./samples:/app/samples
     command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   frontend:

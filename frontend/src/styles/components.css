@@ -260,6 +260,7 @@
 .bullets { padding-left: 18px; list-style: disc; display: flex; flex-direction: column; gap: 2px; color: var(--text-2); }
 .repos { display: flex; flex-direction: column; gap: 6px; }
 .ext-link { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8125rem; }
+.project .chips-inline { margin-left: 0; }
 .project { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
 .fold > summary { cursor: pointer; font-weight: 600; }
 .fold[open] > summary { margin-bottom: 8px; }

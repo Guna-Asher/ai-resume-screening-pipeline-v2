@@ -1,0 +1,249 @@
+{
+  "cand_001.pdf": {
+    "archetype": "strong_agentic",
+    "expected": "eligible",
+    "layout": "standard"
+  },
+  "cand_002.pdf": {
+    "archetype": "rag_pipeline",
+    "expected": "eligible",
+    "layout": "standard"
+  },
+  "cand_003.pdf": {
+    "archetype": "thin_wrapper",
+    "expected": "eligible",
+    "layout": "standard"
+  },
+  "cand_004.pdf": {
+    "archetype": "java_react_python_ai",
+    "expected": "eligible",
+    "layout": "standard"
+  },
+  "cand_005.pdf": {
+    "archetype": "skills_only_frameworks",
+    "expected": "eligible",
+    "layout": "standard"
+  },
+  "cand_006.pdf": {
+    "archetype": "work_experience_ai",
+    "expected": "eligible",
+    "layout": "standard"
+  },
+  "cand_007.pdf": {
+    "archetype": "summary_claim_only",
+    "expected": "eligible",
+    "layout": "standard"
+  },
+  "cand_008.pdf": {
+    "archetype": "no_python",
+    "expected": "rejected",
+    "layout": "standard"
+  },
+  "cand_009.pdf": {
+    "archetype": "python_no_ai",
+    "expected": "rejected",
+    "layout": "standard"
+  },
+  "cand_010.pdf": {
+    "archetype": "tutorial_only_python",
+    "expected": "rejected",
+    "layout": "standard"
+  },
+  "cand_011.pdf": {
+    "archetype": "classic_ml_only",
+    "expected": "rejected",
+    "layout": "standard"
+  },
+  "cand_012.pdf": {
+    "archetype": "non_ai_agent_role",
+    "expected": "rejected",
+    "layout": "standard"
+  },
+  "cand_013.pdf": {
+    "archetype": "strong_agentic",
+    "expected": "eligible",
+    "layout": "titlecase"
+  },
+  "cand_014.pdf": {
+    "archetype": "rag_pipeline",
+    "expected": "eligible",
+    "layout": "titlecase"
+  },
+  "cand_015.pdf": {
+    "archetype": "thin_wrapper",
+    "expected": "eligible",
+    "layout": "titlecase"
+  },
+  "cand_016.pdf": {
+    "archetype": "java_react_python_ai",
+    "expected": "eligible",
+    "layout": "titlecase"
+  },
+  "cand_017.pdf": {
+    "archetype": "skills_only_frameworks",
+    "expected": "eligible",
+    "layout": "titlecase"
+  },
+  "cand_018.pdf": {
+    "archetype": "work_experience_ai",
+    "expected": "eligible",
+    "layout": "titlecase"
+  },
+  "cand_019.pdf": {
+    "archetype": "summary_claim_only",
+    "expected": "eligible",
+    "layout": "flat"
+  },
+  "cand_020.pdf": {
+    "archetype": "no_python",
+    "expected": "rejected",
+    "layout": "titlecase"
+  },
+  "cand_021.pdf": {
+    "archetype": "python_no_ai",
+    "expected": "rejected",
+    "layout": "titlecase"
+  },
+  "cand_022.pdf": {
+    "archetype": "tutorial_only_python",
+    "expected": "rejected",
+    "layout": "titlecase"
+  },
+  "cand_023.pdf": {
+    "archetype": "classic_ml_only",
+    "expected": "rejected",
+    "layout": "titlecase"
+  },
+  "cand_024.pdf": {
+    "archetype": "non_ai_agent_role",
+    "expected": "rejected",
+    "layout": "titlecase"
+  },
+  "cand_025.pdf": {
+    "archetype": "strong_agentic",
+    "expected": "eligible",
+    "layout": "pipe"
+  },
+  "cand_026.pdf": {
+    "archetype": "rag_pipeline",
+    "expected": "eligible",
+    "layout": "inline"
+  },
+  "cand_027.pdf": {
+    "archetype": "thin_wrapper",
+    "expected": "eligible",
+    "layout": "inline"
+  },
+  "cand_028.pdf": {
+    "archetype": "java_react_python_ai",
+    "expected": "eligible",
+    "layout": "inline"
+  },
+  "cand_029.pdf": {
+    "archetype": "skills_only_frameworks",
+    "expected": "eligible",
+    "layout": "inline"
+  },
+  "cand_030.pdf": {
+    "archetype": "work_experience_ai",
+    "expected": "eligible",
+    "layout": "pipe"
+  },
+  "cand_031.pdf": {
+    "archetype": "summary_claim_only",
+    "expected": "eligible",
+    "layout": "standard"
+  },
+  "cand_032.pdf": {
+    "archetype": "no_python",
+    "expected": "rejected",
+    "layout": "inline"
+  },
+  "cand_033.pdf": {
+    "archetype": "python_no_ai",
+    "expected": "rejected",
+    "layout": "inline"
+  },
+  "cand_034.pdf": {
+    "archetype": "tutorial_only_python",
+    "expected": "rejected",
+    "layout": "pipe"
+  },
+  "cand_035.pdf": {
+    "archetype": "classic_ml_only",
+    "expected": "rejected",
+    "layout": "inline"
+  },
+  "cand_036.pdf": {
+    "archetype": "non_ai_agent_role",
+    "expected": "rejected",
+    "layout": "pipe"
+  },
+  "cand_037.pdf": {
+    "archetype": "strong_agentic",
+    "expected": "eligible",
+    "layout": "tech"
+  },
+  "cand_038.pdf": {
+    "archetype": "rag_pipeline",
+    "expected": "eligible",
+    "layout": "pipe"
+  },
+  "cand_039.pdf": {
+    "archetype": "thin_wrapper",
+    "expected": "eligible",
+    "layout": "pipe"
+  },
+  "cand_040.pdf": {
+    "archetype": "java_react_python_ai",
+    "expected": "eligible",
+    "layout": "tech"
+  },
+  "cand_041.pdf": {
+    "archetype": "skills_only_frameworks",
+    "expected": "eligible",
+    "layout": "pipe"
+  },
+  "cand_042.pdf": {
+    "archetype": "work_experience_ai",
+    "expected": "eligible",
+    "layout": "tech"
+  },
+  "cand_043.pdf": {
+    "archetype": "summary_claim_only",
+    "expected": "eligible",
+    "layout": "flat"
+  },
+  "cand_044.pdf": {
+    "archetype": "no_python",
+    "expected": "rejected",
+    "layout": "pipe"
+  },
+  "cand_045.pdf": {
+    "archetype": "python_no_ai",
+    "expected": "rejected",
+    "layout": "tech"
+  },
+  "cand_046_corrupt.pdf": {
+    "archetype": "corrupt_pdf",
+    "expected": "failed"
+  },
+  "cand_047_empty.pdf": {
+    "archetype": "empty_file",
+    "expected": "failed"
+  },
+  "cand_048_notes.docx": {
+    "archetype": "unsupported_type",
+    "expected": "failed"
+  },
+  "cand_049_copy.pdf": {
+    "archetype": "byte_duplicate",
+    "duplicate_of": "cand_001.pdf",
+    "expected": "duplicate"
+  },
+  "cand_050_reexport.pdf": {
+    "archetype": "text_duplicate",
+    "duplicate_of": "cand_001.pdf",
+    "expected": "duplicate"
+  }
+}

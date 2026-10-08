@@ -44,7 +44,7 @@ NEGATIVE_CONTEXT = rx(
 # "machine learning" etc. contain "learning" but are not learning-context.
 LEARNING_FALSE_FRIENDS = rx(
     r"\b(?:machine|deep|reinforcement|transfer|supervised|unsupervised|federated|"
-    r"representation|ensemble) learning\b"
+    r"representation|ensemble)[ -]learning\b|\bscikit-learn\b"
 )
 
 # --------------------------------------------------------------------------- #
