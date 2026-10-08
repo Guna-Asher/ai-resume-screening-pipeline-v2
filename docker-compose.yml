@@ -1,13 +1,21 @@
-# Backend only. The host needs nothing but Docker + Docker Compose.
+# Local stack: backend (FastAPI) + frontend (React/Vite).
+# The host needs nothing but Docker + Docker Compose.
+#
+#   docker compose up --build        # frontend http://localhost:3000, backend http://localhost:8000
+#
+# Ports are configurable: FRONTEND_PORT / BACKEND_PORT (e.g. in a root .env file).
 services:
   backend:
     build: ./backend
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     # Optional: copy .env.example to .env to configure. Never baked into the image.
     env_file:
       - path: .env
         required: false
+    environment:
+      # Browser origins allowed to call the API (the frontend). Override via CORS_ORIGINS in .env.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}
     volumes:
       # Source is mounted so code changes need no rebuild (only requirements.txt does).
       - ./backend/app:/app/app
@@ -18,3 +26,22 @@ services:
       - ./resumes:/app/resumes
       - ./output:/app/output
     command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      # URL the BROWSER uses to reach the backend (host-side port).
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:${BACKEND_PORT:-8000}}
+    volumes:
+      # Sources are mounted for hot reload; node_modules stays inside the image.
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+    depends_on:
+      - backend

@@ -83,7 +83,20 @@ class ScoreItem(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
 
 
+def _category_max() -> dict[str, int]:
+    return {
+        "ai_project_depth": AI_PROJECT_DEPTH_MAX,
+        "python_backend": PYTHON_BACKEND_MAX,
+        "cloud_fullstack": CLOUD_FULLSTACK_MAX,
+        "github": GITHUB_MAX,
+        "engineering_depth": ENGINEERING_DEPTH_MAX,
+    }
+
+
 class ScoreBreakdown(BaseModel):
+    # The assignment's category weights, exposed so clients can render "36 / 40" without
+    # hard-coding them. total_score is out of sum(category_max) == 100.
+    category_max: dict[str, int] = Field(default_factory=_category_max)
     ai_project_depth: int = Field(ge=0, le=AI_PROJECT_DEPTH_MAX)
     python_backend: int = Field(ge=0, le=PYTHON_BACKEND_MAX)
     cloud_fullstack: int = Field(ge=0, le=CLOUD_FULLSTACK_MAX)

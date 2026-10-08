@@ -88,3 +88,12 @@ def test_project_summary_lists_depth_signals(screen):
     assert project.name == "Document QA Assistant"
     assert "retrieval" in project.ai_signals and project.ai_depth_points
     assert project.shallow is False
+
+
+def test_score_breakdown_exposes_the_category_maxima(screen):
+    s = screen(STRONG_AGENTIC).score_breakdown
+    assert s.category_max == {
+        "ai_project_depth": 40, "python_backend": 30, "cloud_fullstack": 15,
+        "github": 10, "engineering_depth": 5,
+    }
+    assert sum(s.category_max.values()) == 100
