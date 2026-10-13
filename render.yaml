@@ -1,0 +1,46 @@
+# Render Blueprint: two services.
+#
+#   resume-screening-web  (Static Site)  ->  calls  ->  resume-screening-api  (Docker web service)
+#
+# The two URLs below assume these service names are free on Render. If Render gives either service a different
+# subdomain, edit CORS_ORIGINS (api) and VITE_API_BASE_URL (web) to match, then redeploy the web service
+# ("Clear build cache & deploy"), because Vite bakes VITE_API_BASE_URL into the bundle at build time.
+#
+# Optional settings (add them in the Render dashboard, never in this file):
+#   LLM_PROVIDER, LLM_MODEL, LLM_API_KEY, LLM_BASE_URL   -> enables the optional LLM semantic evidence
+#   GITHUB_TOKEN                                         -> strongly recommended: shared Render egress IPs
+#                                                           exhaust GitHub's unauthenticated rate limit quickly
+# Without them the app still works: LLM shows "unavailable" and GitHub runs unauthenticated.
+#
+# Note: results.json is written to the instance's local disk, which Render does NOT persist across
+# restarts, redeploys or free-plan spin-downs. See "Render deployment" in README.md.
+
+services:
+  - type: web
+    name: resume-screening-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Exact browser origin of the frontend (scheme + host, no trailing slash). Never "*" in production.
+      - key: CORS_ORIGINS
+        value: https://resume-screening-web.onrender.com
+      # PORT is injected by Render; the image binds 0.0.0.0:$PORT (see backend/Dockerfile).
+
+  - type: web
+    name: resume-screening-web
+    runtime: static
+    buildCommand: cd frontend && npm ci --include=dev && npm run build
+    staticPublishPath: ./frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # URL the BROWSER uses to reach the API service. Build-time value (Vite), see the note above.
+      - key: VITE_API_BASE_URL
+        value: https://resume-screening-api.onrender.com
+      - key: NODE_VERSION
+        value: 22.12.0

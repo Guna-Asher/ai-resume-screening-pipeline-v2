@@ -17,5 +17,8 @@ RUN useradd --create-home --uid 1000 app \
 COPY --chown=app:app . .
 USER app
 
+# Hosting platforms (e.g. Render) inject PORT; locally it stays 8000. Always bind all interfaces.
+# `exec` keeps uvicorn as PID 1 so it receives SIGTERM and shuts down cleanly.
+ENV PORT=8000
 EXPOSE 8000
-CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn app.api:app --host 0.0.0.0 --port ${PORT}"]
